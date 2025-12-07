@@ -68,7 +68,7 @@ The user can edit **everything** in Lua, including internal tools.
 ---
 
 ## 📂 Proposed Folder Structure
-
+```
 /core
   /java
     DesktopScreen.java
@@ -98,7 +98,7 @@ The user can edit **everything** in Lua, including internal tools.
 
 /projects
 (user projects)
-
+```
 ---
 
 ## 🖥️ User Workflow
