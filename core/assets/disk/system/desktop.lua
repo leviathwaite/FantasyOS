@@ -1,8 +1,18 @@
--- NerdOS Desktop v4.1 (Internal Asset Update)
+-- NerdOS Desktop v4.1 (High Contrast Fix)
 
--- Standard Require (Works if Java restarted, or if files in assets/system/ match)
-local ui = require("system/ui")
-local code_app = require("system/apps/code_editor")
+-- 1. POLYFILL LOADER
+function load_from_disk(path)
+   local content = fs.read(path)
+   if not content then error("Could not read " .. path) end
+   local chunk, err = load(content, path)
+   if not chunk then error(err) end
+   return chunk()
+end
+
+-- Load Modules
+_G.ui_module = load_from_disk("system/ui.lua")
+local ui = _G.ui_module
+local code_app = load_from_disk("system/apps/code_editor.lua")
 
 -- UI State
 start_menu_open = false
@@ -17,7 +27,7 @@ current_project = "boot.lua"
 project_list = {}
 
 function _init()
-  log("Desktop v4.1 (Internal) Loaded")
+  log("Desktop v4.1 Loaded")
   if code_app.open then code_app.open(current_project) end
 end
 
@@ -77,7 +87,7 @@ end
 
 function _draw()
   sys.target("os")
-  -- Clear with dark blue (1)
+  -- Clear with dark blue (1) instead of 16 to ensure visibility
   cls(1)
 
   -- Grid
@@ -106,10 +116,10 @@ function _draw()
 end
 
 function draw_taskbar()
-  -- Taskbar background (Black)
+  -- Taskbar background (Dark Grey/Black)
   rect(0, 0, 1920, 40, 0)
 
-  -- Separator
+  -- Separator line
   rect(0, 40, 1920, 2, 6)
 
   -- Start Button
@@ -121,14 +131,13 @@ function draw_taskbar()
   end
 
   -- Clock / Project Status
-  local time_str = (os and os.date) and os.date("%H:%M") or "00:00"
-  print(time_str .. " | " .. current_project, 1750, 10, 7)
+  print(os.date("%H:%M") .. " | " .. current_project, 1750, 10, 7)
 end
 
 function draw_start_menu()
   local mx, my, mw, mh = 10, 45, 200, 240
   rect(mx+4, my-4, mw, mh, 0) -- Shadow
-  rect(mx, my, mw, mh, 1)     -- Body
+  rect(mx, my, mw, mh, 1)     -- Body (Dark Blue)
   rect(mx, my, mw, 1, 7)      -- Borders
   rect(mx, my+mh, mw, 1, 7)
   rect(mx, my, 1, mh, 7)
@@ -320,9 +329,6 @@ function launch_game()
   -- 2. LOAD ACTIVE PROJECT
   if fs.exists(current_project) then
       local content = fs.read(current_project)
-      -- Explicitly passing the filename to load is good, but load() doesn't auto-sugar.
-      -- If we want sugar without restart, we'd need a lua sugar implementation, which is heavy.
-      -- Assuming user writes standard Lua for now.
       local chunk, err = load(content, current_project)
       if chunk then
           local status, err2 = pcall(chunk)

@@ -2,6 +2,7 @@ package com.nerddaygames.engine;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import org.luaj.vm2.Globals;
@@ -22,34 +23,171 @@ public class ScriptEngine {
     private static final int INSTRUCTION_CHECK_INTERVAL = 1000;
     private static final long MAX_EXECUTION_TIME_MS = 200;
     private long startTime;
+    private boolean enableTimeout;
+
+    public interface SystemCallback {
+        void onSystemCall(String command);
+    }
+    private SystemCallback systemCallback;
 
     public ScriptEngine(FantasyVM vm) {
+        this(vm, true);
+    }
+
+    public ScriptEngine(FantasyVM vm, boolean enableTimeout) {
         this.vm = vm;
+        this.enableTimeout = enableTimeout;
         initLua();
     }
 
+    public void setSystemCallback(SystemCallback callback) {
+        this.systemCallback = callback;
+    }
+
     private void initLua() {
+        // Load standard libraries (includes os, math, string, table, io, package, etc.)
         globals = JsePlatform.standardGlobals();
         globals.load(new org.luaj.vm2.lib.DebugLib());
+
+        // Custom resource finder for dofile()
         globals.finder = new ResourceFinder() {
             @Override public InputStream findResource(String f) {
-                if(!f.endsWith(".lua")) f+=".lua";
-                if(Gdx.files.internal(f).exists()) {
-                    try { return new ByteArrayInputStream(LuaSyntaxCandy.process(Gdx.files.internal(f).readString()).getBytes()); }
-                    catch(Exception e){}
-                } return null;
+                // Handle both with and without .lua extension
+                String filename = f.endsWith(".lua") ? f : (f + ".lua");
+
+                // Check FileSystem (Disk -> Internal)
+                if (vm.fs.exists(filename)) {
+                    try {
+                        String content = vm.fs.read(filename);
+                        if (content != null) {
+                            String processed = LuaSyntaxCandy.process(content);
+                            return new ByteArrayInputStream(processed.getBytes("UTF-8"));
+                        }
+                    }
+                    catch(Exception e){
+                        System.err.println("Error loading " + filename + ": " + e.getMessage());
+                        e.printStackTrace();
+                    }
+                }
+                return null;
             }
         };
 
-        LuaValue hook = new ZeroArgFunction() {
-            @Override public LuaValue call() {
-                if (System.currentTimeMillis() - startTime > MAX_EXECUTION_TIME_MS) throw new LuaError("CPU LIMIT EXCEEDED");
-                return LuaValue.NONE;
+        // Override require() to use our custom loader
+        LuaValue customLoader = new VarArgFunction() {
+            @Override
+            public Varargs invoke(Varargs args) {
+                String moduleName = args.checkjstring(1);
+
+                // 1. Check package.loaded
+                LuaValue loaded = globals.get("package").get("loaded");
+                LuaValue cached = loaded.get(moduleName);
+                if (!cached.isnil()) return cached;
+
+                String filename = moduleName.replace('.', '/');
+                if (!filename.endsWith(".lua")) filename += ".lua";
+
+                try {
+                    // Check FileSystem (Disk -> Internal)
+                    if (vm.fs.exists(filename)) {
+                        String content = vm.fs.read(filename);
+                        if (content != null) {
+                            String processed = LuaSyntaxCandy.process(content);
+                            LuaValue chunk = globals.load(processed, filename);
+                            LuaValue result = chunk.call();
+
+                            // If module returned nothing, default to true (like standard Lua)
+                            // But usually modules return a table.
+                            if (result.isnil()) result = LuaValue.TRUE;
+
+                            loaded.set(moduleName, result);
+                            return result;
+                        }
+                    }
+                } catch (Exception e) {
+                    // Propagate error so we don't get silent failures
+                    throw new LuaError("Error requiring " + moduleName + ": " + e.getMessage());
+                }
+
+                // Return string to indicate "module not found" to Lua's require system
+                return LuaValue.valueOf("\n\tno file '" + filename + "' (checked disk/internal)");
             }
         };
-        globals.get("debug").get("sethook").call(hook, LuaValue.valueOf(""), LuaValue.valueOf(INSTRUCTION_CHECK_INTERVAL));
+
+        // Insert our custom loader at the front of package.loaders
+        LuaValue package_ = globals.get("package");
+        LuaValue loaders = package_.get("loaders");
+        if (loaders.isnil()) loaders = package_.get("searchers"); // Lua 5.2+ uses "searchers"
+
+        // Create new loaders table with our loader first
+        LuaValue newLoaders = LuaValue.tableOf();
+        newLoaders.set(1, customLoader);
+        if (!loaders.isnil()) {
+            for (int i = 1; i <= loaders.length(); i++) {
+                newLoaders.set(i + 1, loaders.get(i));
+            }
+        }
+        package_.set("loaders", newLoaders);
+        package_.set("searchers", newLoaders); // Set both for compatibility
+
+        // Override dofile() to work with our asset system
+        globals.set("dofile", new OneArgFunction() {
+            @Override
+            public LuaValue call(LuaValue filename) {
+                String path = filename.checkjstring();
+                if (!path.endsWith(".lua")) path += ".lua";
+
+                try {
+                    // Check FileSystem (Disk -> Internal)
+                    if (vm.fs.exists(path)) {
+                        String content = vm.fs.read(path);
+                        if (content != null) {
+                            String processed = LuaSyntaxCandy.process(content);
+                            return globals.load(processed, path).call();
+                        }
+                    }
+                    throw new LuaError("File not found: " + path);
+                } catch (Exception e) {
+                    throw new LuaError("Error in dofile(" + path + "): " + e.getMessage());
+                }
+            }
+        });
+
+        if (enableTimeout) {
+            LuaValue hook = new ZeroArgFunction() {
+                @Override public LuaValue call() {
+                    if (System.currentTimeMillis() - startTime > MAX_EXECUTION_TIME_MS) throw new LuaError("CPU LIMIT EXCEEDED");
+                    return LuaValue.NONE;
+                }
+            };
+            globals.get("debug").get("sethook").call(hook, LuaValue.valueOf(""), LuaValue.valueOf(INSTRUCTION_CHECK_INTERVAL));
+        }
 
         globals.set("log", new OneArgFunction() { @Override public LuaValue call(LuaValue m) { System.out.println("[LUA] "+m.tojstring()); return LuaValue.NONE; }});
+
+        // Ensure os library functions are available
+        LuaValue os = globals.get("os");
+        if (os.isnil()) {
+            os = LuaValue.tableOf();
+            globals.set("os", os);
+        }
+        if (os.get("time").isnil()) {
+            os.set("time", new ZeroArgFunction() {
+                @Override public LuaValue call() {
+                    return LuaValue.valueOf(System.currentTimeMillis() / 1000);
+                }
+            });
+        }
+        if (os.get("date").isnil()) {
+            os.set("date", new OneArgFunction() {
+                @Override public LuaValue call(LuaValue format) {
+                    String fmt = format.optjstring("%c");
+                    long time = System.currentTimeMillis();
+                    java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat(fmt.replace("%H", "HH").replace("%M", "mm"));
+                    return LuaValue.valueOf(sdf.format(new java.util.Date(time)));
+                }
+            });
+        }
 
         // SYSTEM API
         LuaValue sys = LuaValue.tableOf();
@@ -93,6 +231,84 @@ public class ScriptEngine {
                 return LuaValue.NONE;
             }
         });
+
+        globals.set("sspr", new VarArgFunction() {
+            @Override public LuaValue invoke(Varargs args) {
+                int sx = args.checkint(1);
+                int sy = args.checkint(2);
+                int sw = args.checkint(3);
+                int sh = args.checkint(4);
+                int dx = args.checkint(5);
+                int dy = args.checkint(6);
+                int dw = args.checkint(7);
+                int dh = args.checkint(8);
+
+                TextureRegion[] currentSheet = vm.getActiveSprites();
+                if (currentSheet == null || currentSheet.length == 0) return LuaValue.NONE;
+
+                vm.beginBatch();
+                vm.batch.setColor(1, 1, 1, 1);
+                // Draw stretched region from sprite sheet texture
+                vm.batch.draw(currentSheet[0].getTexture(), dx, dy, dw, dh, sx, sy, sx + sw, sy + sh, false, false);
+                return LuaValue.NONE;
+            }
+        });
+
+        globals.set("sget", new VarArgFunction() {
+            @Override public LuaValue invoke(Varargs args) {
+                return LuaValue.valueOf(vm.sget(args.checkint(1), args.checkint(2)));
+            }
+        });
+
+        globals.set("sset", new VarArgFunction() {
+            @Override public LuaValue invoke(Varargs args) {
+                vm.sset(args.checkint(1), args.checkint(2), args.checkint(3));
+                vm.refreshSpriteTexture();
+                return LuaValue.NONE;
+            }
+        });
+
+        globals.set("save_sprites", new OneArgFunction() {
+            @Override public LuaValue call(LuaValue path) {
+                return LuaValue.valueOf(vm.saveSpriteSheet(path.checkjstring()));
+            }
+        });
+
+        globals.set("sprite_sheet_ok", new ZeroArgFunction() {
+            @Override public LuaValue call() {
+                return LuaValue.valueOf(vm.isSpriteSheetLoaded());
+            }
+        });
+
+        globals.set("display_width", new ZeroArgFunction() {
+            @Override public LuaValue call() {
+                return LuaValue.valueOf(Gdx.graphics.getWidth());
+            }
+        });
+
+        globals.set("display_height", new ZeroArgFunction() {
+            @Override public LuaValue call() {
+                return LuaValue.valueOf(Gdx.graphics.getHeight());
+            }
+        });
+
+        globals.set("font_width", new ZeroArgFunction() {
+            @Override public LuaValue call() {
+                BitmapFont font = vm.getCurrentFont();
+                // Get width of a standard character (using 'M' which is typically widest in monospace)
+                com.badlogic.gdx.graphics.g2d.GlyphLayout layout = new com.badlogic.gdx.graphics.g2d.GlyphLayout();
+                layout.setText(font, "M");
+                return LuaValue.valueOf((int)layout.width);
+            }
+        });
+
+        globals.set("font_height", new ZeroArgFunction() {
+            @Override public LuaValue call() {
+                BitmapFont font = vm.getCurrentFont();
+                return LuaValue.valueOf((int)font.getLineHeight());
+            }
+        });
+
         globals.set("sheet", new OneArgFunction() { @Override public LuaValue call(LuaValue id) { int idx = id.checkint(); if (idx >= 0 && idx < vm.spriteSheets.size()) vm.activeSheetIndex = idx; return LuaValue.NONE; }});
         globals.set("map", new VarArgFunction() { @Override public LuaValue invoke(Varargs args) { vm.map(args.checkint(1), args.checkint(2), args.checkint(3), args.checkint(4), args.checkint(5), args.checkint(6)); return LuaValue.NONE; }});
         globals.set("mget", new VarArgFunction() { @Override public LuaValue invoke(Varargs args) { return LuaValue.valueOf(vm.mget(args.checkint(1), args.checkint(2))); }});
@@ -129,6 +345,21 @@ public class ScriptEngine {
 
         globals.set("remap", new VarArgFunction() { @Override public LuaValue invoke(Varargs args) { try { vm.input.remap(args.checkint(1), Input.Keys.valueOf(args.checkjstring(2).toUpperCase())); } catch (Exception e) {} return LuaValue.NONE; }});
 
+        // CLIPBOARD (get/set)
+        globals.set("clipboard", new VarArgFunction() {
+            @Override public LuaValue invoke(Varargs args) {
+                if (args.narg() > 0) {
+                    // Set clipboard
+                    Gdx.app.getClipboard().setContents(args.checkjstring(1));
+                    return LuaValue.NONE;
+                } else {
+                    // Get clipboard
+                    String content = Gdx.app.getClipboard().getContents();
+                    return (content != null) ? LuaValue.valueOf(content) : LuaValue.NIL;
+                }
+            }
+        });
+
         // FS
         LuaValue fs = LuaValue.tableOf();
         fs.set("list", new OneArgFunction() { @Override public LuaValue call(LuaValue path) { java.util.List<String> files = vm.fs.list(path.optjstring("")); LuaValue list = LuaValue.tableOf(); for (int i = 0; i < files.size(); i++) list.set(i + 1, LuaValue.valueOf(files.get(i))); return list; }});
@@ -147,9 +378,13 @@ public class ScriptEngine {
     }
 
     public void runScript(String script) {
+        runScript(script, "boot.lua");
+    }
+
+    public void runScript(String script, String scriptName) {
         try {
             String sugared = LuaSyntaxCandy.process(script);
-            globals.load(sugared, "boot.lua").call();
+            globals.load(sugared, scriptName).call();
         } catch (LuaError e) { throw e; }
         catch (Exception e) { throw new LuaError(e); }
     }

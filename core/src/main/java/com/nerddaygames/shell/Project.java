@@ -1,42 +1,55 @@
-package com.nerddaygames.engine.shell;
+package com.nerddaygames.shell;
 
 import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.utils.Json;
-import com.nerddaygames.engine.Profile;
 
 public class Project {
-    public final FileHandle rootDir;
-    public final ProjectConfig config;
+    private FileHandle projectDir;
+    public ProjectConfig config;
 
-    public Project(FileHandle rootDir) {
-        this.rootDir = rootDir;
+    public Project(FileHandle dir) {
+        this.projectDir = dir;
+        loadConfig();
+    }
 
-        // Load project.json or create a default one if new
-        FileHandle configFile = rootDir.child("project.json");
-        Json json = new Json();
-
+    private void loadConfig() {
+        FileHandle configFile = projectDir.child("project.json");
         if (configFile.exists()) {
-            config = json.fromJson(ProjectConfig.class, configFile);
+            try {
+                config = new Json().fromJson(ProjectConfig.class, configFile);
+            } catch (Exception e) {
+                // Fallback if json is corrupt
+                config = new ProjectConfig();
+                config.name = "Unknown Project";
+            }
         } else {
+            // Default config if missing
             config = new ProjectConfig();
-            saveConfig();
+            config.name = projectDir.name();
         }
     }
 
-    public void saveConfig() {
-        Json json = new Json();
-        // Pretty print for human readability
-        rootDir.child("project.json").writeString(json.prettyPrint(config), false);
+    /**
+     * Helper to get a file inside the project folder.
+     */
+    public FileHandle getAsset(String path) {
+        return projectDir.child(path);
     }
 
-    public FileHandle getAsset(String name) {
-        return rootDir.child(name);
+    /**
+     * Returns the root directory of the project.
+     * Required by RunScreen.
+     */
+    public FileHandle getDir() {
+        return projectDir;
     }
 
-    // Serializable Data Class
+    // --- CONFIG MODEL ---
     public static class ProjectConfig {
-        public String name = "Untitled Project";
+        public String name = "New Project";
         public String author = "User";
-        public Profile targetProfile = Profile.createNerdOS();
+        public String version = "1.0";
+        public int width = 240;  // Optional: Allow per-project resolution
+        public int height = 136;
     }
 }

@@ -3,50 +3,37 @@ package com.nerddaygames.engine;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputProcessor;
-import com.badlogic.gdx.controllers.Controller;
-import com.badlogic.gdx.controllers.ControllerListener;
-import com.badlogic.gdx.controllers.Controllers;
-import com.badlogic.gdx.controllers.ControllerMapping;
-import com.badlogic.gdx.math.Vector2;
-import com.badlogic.gdx.utils.IntIntMap;
 import com.badlogic.gdx.utils.viewport.Viewport;
-import java.util.ArrayList;
-import java.util.List;
+import com.badlogic.gdx.math.Vector2;
+import java.util.LinkedList;
+import java.util.Queue;
 
-public class InputManager implements ControllerListener, InputProcessor {
-
-    public static final int BTN_LEFT=0, BTN_RIGHT=1, BTN_UP=2, BTN_DOWN=3;
-    public static final int BTN_A=4, BTN_B=5, BTN_X=6, BTN_Y=7;
-
-    // Virtual Buttons (Gamepad/Keys)
-    private final boolean[] virtualBtnState = new boolean[8];
-    private final boolean[] lastVirtualBtnState = new boolean[8];
-
-    // Mouse State
-    public int mouseX, mouseY;
-    public boolean mouseDownLeft, mouseDownRight;
-    private boolean lastMouseLeft; // To detect MouseUp
-
-    // Event Data (Reset every frame)
-    public int scrollAmount = 0;
-
-    // Typing Buffer
-    private final List<Character> charBuffer = new ArrayList<>();
-
-    // Internal
-    private final Vector2 tempVec = new Vector2();
+public class InputManager implements InputProcessor {
     private Viewport viewport;
-    private final IntIntMap keyMap = new IntIntMap();
-    private Controller activeController;
+
+    // Text Input Queue (Thread-safe)
+    private final Queue<Character> typeQueue = new LinkedList<>();
+
+    // Mouse State Cache
+    public int mouseX, mouseY;
+    public int scrollAmount;
+    public boolean mouseDownLeft, mouseDownRight;
+    private boolean prevMouseLeft, prevMouseRight;
+
+    // --- FANTASY CONSOLE MAPPING ---
+    // 0: Left, 1: Right, 2: Up, 3: Down, 4: Z, 5: X, 6: Enter
+    private int[] buttonMap = {
+        Input.Keys.LEFT,
+        Input.Keys.RIGHT,
+        Input.Keys.UP,
+        Input.Keys.DOWN,
+        Input.Keys.Z,     // Button A
+        Input.Keys.X,     // Button B
+        Input.Keys.ENTER, // Start
+        Input.Keys.ESCAPE // Button 7
+    };
 
     public InputManager() {
-        resetDefaultMappings();
-        Controllers.addListener(this);
-        if (Controllers.getControllers().notEmpty()) {
-            activeController = Controllers.getControllers().first();
-        }
-
-        // CRITICAL: Register this class to receive typing and scroll events
         Gdx.input.setInputProcessor(this);
     }
 
@@ -54,129 +41,129 @@ public class InputManager implements ControllerListener, InputProcessor {
         this.viewport = viewport;
     }
 
-    public void resetDefaultMappings() {
-        keyMap.clear();
-        keyMap.put(BTN_LEFT, Input.Keys.LEFT);
-        keyMap.put(BTN_RIGHT, Input.Keys.RIGHT);
-        keyMap.put(BTN_UP, Input.Keys.UP);
-        keyMap.put(BTN_DOWN, Input.Keys.DOWN);
-        keyMap.put(BTN_A, Input.Keys.Z);
-        keyMap.put(BTN_B, Input.Keys.X);
-        keyMap.put(BTN_X, Input.Keys.S);
-        keyMap.put(BTN_Y, Input.Keys.A);
-    }
-
-    public void remap(int virtualBtn, int physicalKey) {
-        keyMap.put(virtualBtn, physicalKey);
-    }
-
-    // CALLED ONCE PER FRAME BY FANTASYVM
     public void update() {
-        // 1. Snapshot previous state
-        System.arraycopy(virtualBtnState, 0, lastVirtualBtnState, 0, virtualBtnState.length);
-        lastMouseLeft = mouseDownLeft;
+        scrollAmount = 0; // Reset scroll delta per frame
 
-        // Reset per-frame event data
-        scrollAmount = 0;
-
-        // 2. Poll Current Mouse State
-        if (viewport != null) {
-            tempVec.set(Gdx.input.getX(), Gdx.input.getY());
-            viewport.unproject(tempVec);
-            mouseX = (int) tempVec.x;
-            mouseY = (int) tempVec.y;
-        }
+        // Track mouse button state
+        prevMouseLeft = mouseDownLeft;
+        prevMouseRight = mouseDownRight;
         mouseDownLeft = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
         mouseDownRight = Gdx.input.isButtonPressed(Input.Buttons.RIGHT);
 
-        // 3. Poll Current Buttons
-        for (int i = 0; i < 8; i++) {
-            boolean pressed = false;
-            int key = keyMap.get(i, -1);
-            if (key != -1 && Gdx.input.isKeyPressed(key)) pressed = true;
-            if (!pressed && activeController != null) pressed = checkController(i);
-            virtualBtnState[i] = pressed;
+        // Calculate Mouse Position mapped to VM Viewport
+        if (viewport != null) {
+            Vector2 vec = new Vector2(Gdx.input.getX(), Gdx.input.getY());
+            viewport.unproject(vec);
+            mouseX = (int) vec.x;
+            mouseY = (int) vec.y;
+        } else {
+            mouseX = Gdx.input.getX();
+            mouseY = Gdx.graphics.getHeight() - Gdx.input.getY();
         }
     }
 
-    // --- API FOR LUA ---
+    // --- API for Lua ---
 
+    // Hybrid Check:
+    // IDs 0-7 use Fantasy Map (Z/X/Arrows)
+    // IDs > 7 use Raw LibGDX Keycodes (for Editor tools)
     public boolean btn(int id) {
-        if (id < 0 || id > 7) return false;
-        return virtualBtnState[id];
+        if (id >= 0 && id < buttonMap.length) {
+            return Gdx.input.isKeyPressed(buttonMap[id]);
+        }
+        return Gdx.input.isKeyPressed(id);
     }
 
     public boolean btnp(int id) {
-        if (id < 0 || id > 7) return false;
-        return virtualBtnState[id] && !lastVirtualBtnState[id];
+        if (id >= 0 && id < buttonMap.length) {
+            return Gdx.input.isKeyJustPressed(buttonMap[id]);
+        }
+        return Gdx.input.isKeyJustPressed(id);
     }
 
-    // MOUSE LOGIC
-    public boolean isMouseJustReleased() {
-        // Was down last frame, is NOT down this frame
-        return lastMouseLeft && !mouseDownLeft;
-    }
-
+    // Key name helpers (for code editor tools)
     public boolean isKeyHeld(String keyName) {
-        try { return Gdx.input.isKeyPressed(Input.Keys.valueOf(keyName.toUpperCase())); }
-        catch (Exception e) { return false; }
+        try {
+            int keyCode = Input.Keys.valueOf(keyName.toUpperCase());
+            return Gdx.input.isKeyPressed(keyCode);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public boolean isKeyJustPressed(String keyName) {
         try {
-            int key = Input.Keys.valueOf(keyName.toUpperCase());
-            if (key == Input.Keys.ESCAPE) return Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) || Gdx.input.isKeyJustPressed(Input.Keys.BACK);
-            return Gdx.input.isKeyJustPressed(key);
-        } catch (Exception e) { return false; }
+            int keyCode = Input.Keys.valueOf(keyName.toUpperCase());
+            return Gdx.input.isKeyJustPressed(keyCode);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
+    // Character input for text editor
     public String getNextChar() {
-        if (charBuffer.isEmpty()) return null;
-        return String.valueOf(charBuffer.remove(0));
+        Character c = popTypedChar();
+        return (c != null) ? String.valueOf(c) : null;
     }
 
-    // --- EVENTS (InputProcessor) ---
+    // Remap button
+    public void remap(int buttonIndex, int newKeyCode) {
+        if (buttonIndex >= 0 && buttonIndex < buttonMap.length) {
+            buttonMap[buttonIndex] = newKeyCode;
+        }
+    }
+
+    // Mouse Helpers
+    public boolean isMouseDownLeft() { return Gdx.input.isButtonPressed(Input.Buttons.LEFT); }
+    public boolean isMouseDownRight() { return Gdx.input.isButtonPressed(Input.Buttons.RIGHT); }
+    public boolean isMouseJustClicked() { return Gdx.input.isButtonJustPressed(Input.Buttons.LEFT); }
+    public boolean isMouseJustReleased() { return prevMouseLeft && !mouseDownLeft; }
+
+    // Modifier Helpers
+    public boolean isCtrlDown() {
+        return Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
+    }
+
+    public boolean isShiftDown() {
+        return Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
+    }
+
+    public Character popTypedChar() {
+        synchronized (typeQueue) {
+            return typeQueue.poll();
+        }
+    }
+
+    // --- InputProcessor Implementation ---
 
     @Override
     public boolean keyTyped(char character) {
-        charBuffer.add(character);
+        // Filter control characters to prevent "Boxes" in text
+        // Ignore Backspace, Tab, Enter, Delete (Handled by Key Codes in Lua)
+        if (character == '\b' || character == '\t' || character == '\r' || character == '\n' || character == 127) {
+            return false;
+        }
+        // Only accept printable characters
+        if (character >= 32) {
+            synchronized (typeQueue) {
+                typeQueue.add(character);
+            }
+        }
         return true;
     }
 
     @Override
     public boolean scrolled(float amountX, float amountY) {
-        scrollAmount = (int)amountY;
+        scrollAmount = (int) amountY;
         return true;
     }
 
-    // --- BOILERPLATE ---
-    @Override public boolean keyDown(int k) { return false; }
-    @Override public boolean keyUp(int k) { return false; }
+    // Unused methods required by interface
+    @Override public boolean keyDown(int keycode) { return false; }
+    @Override public boolean keyUp(int keycode) { return false; }
     @Override public boolean touchDown(int x, int y, int p, int b) { return false; }
     @Override public boolean touchUp(int x, int y, int p, int b) { return false; }
-    @Override public boolean touchCancelled(int x, int y, int p, int b) { return false; }
+    @Override public boolean touchCancelled(int x, int y, int p, int b) { return false; } // LibGDX 1.13+ compat
     @Override public boolean touchDragged(int x, int y, int p) { return false; }
     @Override public boolean mouseMoved(int x, int y) { return false; }
-
-    private boolean checkController(int virtualID) {
-        if (activeController == null) return false;
-        ControllerMapping map = activeController.getMapping();
-        switch (virtualID) {
-            case BTN_LEFT:  return activeController.getAxis(map.axisLeftX) < -0.5f || activeController.getButton(map.buttonDpadLeft);
-            case BTN_RIGHT: return activeController.getAxis(map.axisLeftX) > 0.5f  || activeController.getButton(map.buttonDpadRight);
-            case BTN_UP:    return activeController.getAxis(map.axisLeftY) < -0.5f || activeController.getButton(map.buttonDpadUp);
-            case BTN_DOWN:  return activeController.getAxis(map.axisLeftY) > 0.5f  || activeController.getButton(map.buttonDpadDown);
-            case BTN_A:     return activeController.getButton(map.buttonA);
-            case BTN_B:     return activeController.getButton(map.buttonB);
-            case BTN_X:     return activeController.getButton(map.buttonX);
-            case BTN_Y:     return activeController.getButton(map.buttonY);
-        }
-        return false;
-    }
-
-    @Override public void connected(Controller c) { activeController = c; }
-    @Override public void disconnected(Controller c) { activeController = null; }
-    @Override public boolean buttonDown(Controller c, int b) { return false; }
-    @Override public boolean buttonUp(Controller c, int b) { return false; }
-    @Override public boolean axisMoved(Controller c, int a, float v) { return false; }
 }

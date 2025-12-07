@@ -71,6 +71,37 @@ public class Palette implements Disposable {
 
     public int size() { return colors.length; }
 
+    public int rgbaToIndex(int rgba8888) {
+        // Extract RGB components (ignore alpha for now)
+        int r = (rgba8888 >>> 24) & 0xFF;
+        int g = (rgba8888 >>> 16) & 0xFF;
+        int b = (rgba8888 >>> 8) & 0xFF;
+
+        // Find closest color in palette
+        int bestMatch = 0;
+        float bestDistance = Float.MAX_VALUE;
+
+        for (int i = 0; i < colors.length; i++) {
+            Color c = colors[i];
+            int cr = (int)(c.r * 255);
+            int cg = (int)(c.g * 255);
+            int cb = (int)(c.b * 255);
+
+            // Euclidean distance in RGB space
+            int dr = r - cr;
+            int dg = g - cg;
+            int db = b - cb;
+            float distance = dr*dr + dg*dg + db*db;
+
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestMatch = i;
+            }
+        }
+
+        return bestMatch;
+    }
+
     @Override
     public void dispose() {
         // No texture to dispose anymore!

@@ -43,6 +43,10 @@ public class FantasyVM {
     public List<TextureRegion[]> spriteSheets;
     public int activeSheetIndex = 0;
 
+    // --- SPRITE EDITING ---
+    private Pixmap spriteSheetPixmap;
+    private Texture spriteSheetTexture;
+
     // --- SUBSYSTEMS ---
     public ScriptEngine scriptEngine;
     public Palette palette;
@@ -62,9 +66,15 @@ public class FantasyVM {
     public String crashLine = "";
     private boolean isBatchDrawing = false;
     private boolean isShapeDrawing = false;
+    private boolean enableTimeout = true;
 
     public FantasyVM(Profile profile) {
+        this(profile, 1); // Default: enable timeout
+    }
+
+    public FantasyVM(Profile profile, int timeoutFlag) {
         this.profile = profile;
+        this.enableTimeout = (timeoutFlag != 0);
 
         // 1. INIT TOOLS FIRST (Fix for NullPointerException)
         this.batch = new SpriteBatch();
@@ -77,7 +87,7 @@ public class FantasyVM {
         this.palette = new Palette();
         this.input = new InputManager();
         this.fs = new FileSystem();
-        this.ram = new Ram(profile.memorySize, profile.memoryBanks);
+        this.ram = new Ram(); // Ram uses fixed 64KB size
 
         // Default Palette Mapping
         for(int i=0; i<32; i++) ram.poke(MEM_PALETTE_MAP + i, i);
@@ -87,7 +97,18 @@ public class FantasyVM {
         loadSprites();
 
         // 5. Boot Lua
-        this.scriptEngine = new ScriptEngine(this);
+        this.scriptEngine = new ScriptEngine(this, enableTimeout);
+    }
+
+    public void resize(int width, int height) {
+        this.profile.width = width;
+        this.profile.height = height;
+        osCamera.setToOrtho(false, width, height);
+        osCamera.update();
+    }
+
+    public com.badlogic.gdx.graphics.Texture getScreenTexture() {
+        return osBuffer.getColorBufferTexture();
     }
 
     private void initVideo() {
@@ -110,13 +131,16 @@ public class FantasyVM {
     private void loadFonts() {
         // OS FONT (JetBrains Mono)
         try {
-            FreeTypeFontGenerator gen = new FreeTypeFontGenerator(Gdx.files.internal("system/JetBrainsMono-Regular.ttf"));
+            FreeTypeFontGenerator gen = new FreeTypeFontGenerator(fs.resolve("system/JetBrainsMono-Regular.ttf"));
             FreeTypeFontParameter p = new FreeTypeFontParameter();
             p.size = 20;
             p.color = Color.WHITE;
             p.minFilter = TextureFilter.Linear;
             p.magFilter = TextureFilter.Linear;
+            p.mono = true; // Force monospace rendering
             osFont = gen.generateFont(p);
+            osFont.setUseIntegerPositions(true); // Use integer positions for crisp rendering
+            osFont.getData().setScale(1.0f);
             gen.dispose();
         } catch (Exception e) {
             // Fallback
@@ -125,7 +149,7 @@ public class FantasyVM {
 
         // GAME FONT (PressStart2P)
         try {
-            FreeTypeFontGenerator gen = new FreeTypeFontGenerator(Gdx.files.internal("system/PressStart2P.ttf"));
+            FreeTypeFontGenerator gen = new FreeTypeFontGenerator(fs.resolve("system/PressStart2P.ttf"));
             FreeTypeFontParameter p = new FreeTypeFontParameter();
             p.size = 8;
             p.color = Color.WHITE;
@@ -278,14 +302,17 @@ public class FantasyVM {
     private void triggerCrash(LuaError e) {
         hasCrashed = true;
         crashMessage = e.getMessage();
+        System.err.println("=== CRASH DETECTED ===");
         System.err.println(crashMessage);
+        e.printStackTrace();
     }
 
     public void reboot() {
         hasCrashed = false;
         try {
-            String bootScript = Gdx.files.internal("system/desktop.lua").readString();
-            scriptEngine.runScript(bootScript);
+            String bootScript = fs.read("system/desktop.lua");
+            if (bootScript == null) throw new Exception("Could not read system/desktop.lua");
+            scriptEngine.runScript(bootScript, "system/desktop.lua");
             scriptEngine.executeFunction("_init");
         } catch (Exception e) { triggerCrash(new LuaError("Reboot failed: " + e.getMessage())); }
     }
@@ -297,20 +324,99 @@ public class FantasyVM {
         loadSheet("sprites.png");
         if (spriteSheets.isEmpty()) spriteSheets.add(new TextureRegion[0]);
     }
+
     private void loadSheet(String f) {
         try {
-            Texture t = new Texture(Gdx.files.internal(f));
-            t.setFilter(TextureFilter.Nearest, TextureFilter.Nearest);
-            TextureRegion[][] tmp = TextureRegion.split(t, 8, 8);
-            TextureRegion[] s = new TextureRegion[tmp.length*tmp[0].length];
-            int i=0; for(TextureRegion[] r:tmp)for(TextureRegion c:r)s[i++]=c;
+            // Load the pixmap for editing (Y=0 at top, PNG format)
+            spriteSheetPixmap = new Pixmap(fs.resolve(f));
+
+            // Create texture from pixmap
+            spriteSheetTexture = new Texture(spriteSheetPixmap);
+            spriteSheetTexture.setFilter(TextureFilter.Nearest, TextureFilter.Nearest);
+
+            // Split into 8x8 sprites
+            TextureRegion[][] tmp = TextureRegion.split(spriteSheetTexture, 8, 8);
+
+            // Flip all regions vertically to fix upside-down rendering
+            // PNG has Y=0 at top, OpenGL has Y=0 at bottom
+            for(TextureRegion[] row : tmp) {
+                for(TextureRegion region : row) {
+                    region.flip(false, true);
+                }
+            }
+
+            // Flatten to 1D array
+            TextureRegion[] s = new TextureRegion[tmp.length * tmp[0].length];
+            int i = 0;
+            for(TextureRegion[] r : tmp) {
+                for(TextureRegion c : r) {
+                    s[i++] = c;
+                }
+            }
             spriteSheets.add(s);
-        } catch(Exception e){}
+        } catch(Exception e) {
+            System.err.println("Failed to load sprite sheet: " + e.getMessage());
+        }
     }
     public TextureRegion[] getActiveSprites() {
         if (activeSheetIndex >= spriteSheets.size()) return null;
         return spriteSheets.get(activeSheetIndex);
     }
+
+    // === SPRITE PIXEL EDITING ===
+
+    public int sget(int x, int y) {
+        if (spriteSheetPixmap == null) return 0;
+        // Bounds check: sprite sheet is 128x128
+        if (x < 0 || x >= 128 || y < 0 || y >= 128) return 0;
+
+        // Get RGBA from pixmap (Y=0 at top in PNG)
+        int rgba = spriteSheetPixmap.getPixel(x, y);
+
+        // Convert RGBA to palette index
+        return palette.rgbaToIndex(rgba);
+    }
+
+    public void sset(int x, int y, int colorIndex) {
+        if (spriteSheetPixmap == null) return;
+        // Bounds check: sprite sheet is 128x128
+        if (x < 0 || x >= 128 || y < 0 || y >= 128) {
+            System.err.println("sset out of bounds: (" + x + "," + y + ")");
+            return;
+        }
+        if (colorIndex < 0 || colorIndex >= 32) return;
+
+        // Get color from palette
+        Color c = palette.get(colorIndex);
+
+        // Set pixel in pixmap (Y=0 at top)
+        spriteSheetPixmap.setColor(c);
+        spriteSheetPixmap.drawPixel(x, y);
+    }
+
+    public void refreshSpriteTexture() {
+        if (spriteSheetTexture == null || spriteSheetPixmap == null) return;
+
+        // Update texture from pixmap
+        spriteSheetTexture.draw(spriteSheetPixmap, 0, 0);
+    }
+
+    public boolean saveSpriteSheet(String path) {
+        if (spriteSheetPixmap == null) return false;
+        try {
+            // Write pixmap to PNG file
+            com.badlogic.gdx.graphics.PixmapIO.writePNG(Gdx.files.local("disk/" + path), spriteSheetPixmap);
+            return true;
+        } catch (Exception e) {
+            System.err.println("Failed to save sprite sheet: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public boolean isSpriteSheetLoaded() {
+        return spriteSheetPixmap != null && spriteSheetTexture != null;
+    }
+
     public void dispose() {
         if(osBuffer!=null)osBuffer.dispose();
         if(gameBuffer!=null)gameBuffer.dispose();
@@ -319,6 +425,8 @@ public class FantasyVM {
         if(osFont!=null)osFont.dispose();
         if(gameFont!=null)gameFont.dispose();
         if(palette!=null)palette.dispose();
+        if(spriteSheetPixmap!=null)spriteSheetPixmap.dispose();
+        if(spriteSheetTexture!=null)spriteSheetTexture.dispose();
     }
 
     public void circle(int x, int y, int r, int c, boolean f) {

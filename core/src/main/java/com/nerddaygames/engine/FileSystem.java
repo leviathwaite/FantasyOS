@@ -16,7 +16,7 @@ public class FileSystem {
     public List<String> list(String path) {
         FileHandle handle = resolve(path);
         List<String> results = new ArrayList<>();
-        if (handle.isDirectory()) {
+        if (handle != null && handle.isDirectory()) {
             for (FileHandle child : handle.list()) {
                 results.add(child.name() + (child.isDirectory() ? "/" : ""));
             }
@@ -25,13 +25,18 @@ public class FileSystem {
     }
 
     public String read(String path) {
+        if (isPathInvalid(path)) return null;
         FileHandle handle = resolve(path);
-        if (handle.exists() && !handle.isDirectory()) return handle.readString();
+        if (handle != null && handle.exists() && !handle.isDirectory()) return handle.readString();
         return null;
     }
 
     public boolean write(String path, String content) {
-        if (path.startsWith("/system")) return false; // Protected
+        if (path.startsWith("/system")) return false;
+        if (isPathInvalid(path)) return false;
+
+        if (content.length() > 10 * 1024 * 1024) return false;
+
         try {
             FileHandle handle = storageRoot.child(cleanPath(path));
             handle.writeString(content, false);
@@ -40,12 +45,23 @@ public class FileSystem {
     }
 
     public boolean exists(String path) {
-        return resolve(path).exists();
+        if (isPathInvalid(path)) return false;
+        FileHandle handle = resolve(path);
+        return handle != null && handle.exists();
     }
 
-    private FileHandle resolve(String path) {
+    private boolean isPathInvalid(String path) {
+        return path.contains("..") || path.contains("~");
+    }
+
+    public FileHandle resolve(String path) {
         path = cleanPath(path);
         FileHandle userFile = storageRoot.child(path);
+        try {
+            if (!userFile.file().getCanonicalPath().startsWith(storageRoot.file().getCanonicalPath())) {
+                return null;
+            }
+        } catch(Exception e) { return null; }
         if (userFile.exists()) return userFile;
         FileHandle internalFile = Gdx.files.internal(path);
         if (internalFile.exists()) return internalFile;

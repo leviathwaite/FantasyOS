@@ -1,5 +1,11 @@
 -- Code Editor Module (Project Support)
-local ui = require("system/ui")
+-- We assume ui is passed or global because require is broken in old Java engine
+local ui = _G.ui_module
+if not ui then
+    -- Fallback if loaded via standard require
+    ui = require("system/ui")
+end
+
 local editor = {}
 
 editor.text = ""
@@ -87,9 +93,8 @@ function editor.draw()
       end
   end
 
-  -- Cursor (blinking)
-  local time_val = (os and os.time) and os.time() or 0
-  if (time_val * 3) % 2 == 0 then
+  -- Cursor
+  if (os.time() * 3) % 2 == 0 then
      rect(cx + 60, draw_y + 4, 12, 20, 12)
   end
 end
