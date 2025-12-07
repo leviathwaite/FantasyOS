@@ -70,35 +70,34 @@ The user can edit **everything** in Lua, including internal tools.
 ## 📂 Proposed Folder Structure
 
 /core
-/java
-DesktopScreen.java
-EditorScreen.java
-FileExplorer.java
-LuaBridge.java
-/lua
-/system
-boot.lua
-desktop.lua
-util.lua
-/tools
-code_editor.lua
-sprite_editor.lua
-map_editor.lua
-sfx_tool.lua
-music_tool.lua
-config_tool.lua
-tool_manifest.json
-/templates
-/starter
-main.lua
-config.lua
-/fantasy_console
-pico8.json
-tic80.json
+  /java
+    DesktopScreen.java
+    EditorScreen.java
+    FileExplorer.java
+    LuaBridge.java
+  /lua
+    /system
+      boot.lua
+      desktop.lua
+      util.lua
+    /tools
+      code_editor.lua
+      sprite_editor.lua
+      map_editor.lua
+      sfx_tool.lua
+      music_tool.lua
+      config_tool.lua
+      tool_manifest.json
+    /templates
+      /starter
+        main.lua
+        config.lua
+      /fantasy_console
+        pico8.json
+        tic80.json
 
 /projects
 (user projects)
-
 
 ---
 
