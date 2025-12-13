@@ -1,185 +1,366 @@
--- ============================================================================
--- NerdOS Code Editor v21.0 (UITheme Integrated)
--- ============================================================================
+-- code.lua
+-- NerdOS Professional Code Editor with tabs, import, save, run, toasts.
+-- Adjusted defaults to avoid overlapping text: larger default font_h/line_h and
+-- dynamic line height when runtime metrics are available.
+
+local CodeEditor = {}
 
 -- ============================================================================
--- 1. UI THEME CLASS
+-- CONFIGURATION & RUNTIME METRICS
 -- ============================================================================
-
-local UITheme = {}
-UITheme.__index = UITheme
-
--- The Palette Definitions
--- Note: Mapped to Integer IDs (0-15) for standard rect/print compatibility.
-UITheme.Palette = {
-    Black       = 0,
-    DeepNavy    = 1,  -- Using Dark Purple/Blue slot
-    DarkSlate   = 1,
-    Slate       = 13, -- Light Blue/Grey
-    White       = 12,
-    Red         = 2,
-    Orange      = 9,
-    Green       = 6,
-    Teal        = 11,
-    Yellow      = 10,
-    Grey        = 5,
-    DarkRed     = 2,
-}
-
--- Semantic Colors ( The "Active" Theme )
-UITheme.Colors = {
-    -- Backgrounds
-    Background      = UITheme.Palette.Black,
-    PanelBackground = UITheme.Palette.DeepNavy, -- Header/Toolbar
-    Gutter          = UITheme.Palette.DeepNavy,
-
-    -- Text
-    TextPrimary     = UITheme.Palette.White,
-    TextSecondary   = UITheme.Palette.Slate,    -- Line Numbers
-    TextDisabled    = UITheme.Palette.Grey,
-
-    -- Syntax Highlighting
-    SyntaxKeyword   = UITheme.Palette.Teal,     -- 11 or 6
-    SyntaxString    = UITheme.Palette.Green,    -- 11
-    SyntaxNumber    = UITheme.Palette.Slate,    -- 13
-    SyntaxComment   = UITheme.Palette.Grey,     -- 5
-    SyntaxFunc      = UITheme.Palette.Orange,   -- 9
-
-    -- Interface Elements
-    Caret           = UITheme.Palette.Yellow,   -- 10
-    Selection       = UITheme.Palette.DarkRed,  -- 2
-    ToastBg         = UITheme.Palette.Grey,     -- 5
-
-    -- Buttons
-    ButtonHover     = 14, -- Standard highlight
-    ButtonIdle      = 13,
-    ButtonText      = 12,
-    ButtonTextHover = 0,
-}
-
-function UITheme.new()
-    local self = setmetatable({}, UITheme)
-    return self
-end
-
--- Initialize the global theme instance
-local theme = UITheme.new()
-
-
--- ============================================================================
--- 2. UI HELPERS (Using Theme)
--- ============================================================================
-
-local ui = {}
-
-function ui.toolbar(x, y, w, h)
-  rect(x, y, w, h, theme.Colors.PanelBackground)
-end
-
-function ui.icon_button(text, x, y, size)
-  local m = mouse()
-  if not m then return false end
-  local hover = m.x >= x and m.x <= x+size and m.y >= y and m.y <= y+size
-  local clicked = hover and m.click
-
-  local bg = hover and theme.Colors.ButtonHover or theme.Colors.ButtonIdle
-  local fg = clicked and theme.Colors.ButtonTextHover or theme.Colors.ButtonText
-
-  rect(x, y, size, size, bg)
-  print(text, x+4, y+4, fg)
-  return clicked
-end
-
--- ============================================================================
--- 3. CONFIGURATION
--- ============================================================================
-
 local config = {
+  win_min_width = 1900,
+  win_min_height = 1000,
   font_w = 8,
-  font_h = 16,
-  line_h = 20,
-  toolbar_h = 36,
-  header_h = 40,
-  text_offset_y = 2,
-  text_left_padding = 10,
-
-  blink_rate = 30,
-  undo_limit = 50,
-
-  -- Note: Colors moved to UITheme class above
+  font_h = 18,     -- bumped up from 16
+  line_h = 22,     -- bumped up from 18 to reduce overlap
+  help_h = 60,
+  tab_width = 2,
+  scroll_speed = 3,
+  colors = {
+    bg = 0, text = 7, keyword = 12, func = 14, num = 9, str = 11,
+    comment = 13, cursor = 10, gutter_bg = 1, gutter_fg = 6,
+    help_bg = 1, help_title = 10, help_text = 7, help_example = 11,
+    selection = 2, current_line = 1, bracket = 10, error = 8
+  },
+  font_size = 20
 }
 
-local Keys = {
-  UP = 19, DOWN = 20, LEFT = 21, RIGHT = 22,
-  ENTER = 66, BACKSPACE = 67, TAB = 61, DEL = 112,
-  SHIFT_LEFT = 59, SHIFT_RIGHT = 60,
-  CONTROL_LEFT = 129, CONTROL_RIGHT = 130,
-  A = 29, C = 31, R = 46, S = 47, V = 50, X = 52, Z = 54
-}
-
--- ============================================================================
--- 4. UTILS
--- ============================================================================
-
-local function clamp(val, min, max)
-  return math.max(min, math.min(max, val))
-end
-
-local function split(str, sep)
-  local t = {}
-  for s in string.gmatch(str .. sep, "(.-)" .. sep) do
-    table.insert(t, s)
+-- Pull runtime font metrics from Java if present
+if type(editor_font_metrics) == "function" then
+  local ok, m = pcall(editor_font_metrics)
+  if ok and m then
+    config.font_w = m.font_w or config.font_w
+    config.font_h = m.font_h or config.font_h
+    -- Recompute line height based on actual font height to avoid overlap
+    local lh = m.line_h or config.line_h or (config.font_h + 6)
+    lh = math.max(lh, math.floor((config.font_h or 16) * 1.35) + 2)
+    config.line_h = lh
   end
-  return t
+else
+  -- If no metrics, still ensure line height is safely larger than font height
+  config.line_h = math.max(config.line_h, math.floor((config.font_h or 16) * 1.35) + 2)
+end
+
+-- The rest of the editor code remains unchanged
+-- ============================================================================
+-- SAFE BINDINGS WRAPPERS
+-- ============================================================================
+local function is_func(v) return type(v) == "function" end
+
+local function btn_safe(i)
+  if not is_func(btn) then return false end
+  local ok, res = pcall(function() return btn(i) end)
+  if not ok then return false end
+  return res and true or false
+end
+
+local function btnp_safe(i)
+  if not is_func(btnp) then return false end
+  local ok, res = pcall(function() return btnp(i) end)
+  if not ok then return false end
+  return res and true or false
+end
+
+local function key_safe(v)
+  if is_func(key) then
+    local ok, res = pcall(function() return key(v) end)
+    if ok then return res and true or false end
+  end
+  if is_func(keyp) then
+    local ok2, res2 = pcall(function() return keyp(v) end)
+    if ok2 then return res2 and true or false end
+  end
+  return false
+end
+
+local function kbchar()
+  if is_func(char) then
+    local ok, res = pcall(function() return char() end)
+    if ok then return res end
+  end
+  if is_func(keyboard_char) then
+    local ok, res = pcall(function() return keyboard_char() end)
+    if ok then return res end
+  end
+  return nil
+end
+
+local function get_mouse()
+  if is_func(mouse) then
+    local ok, res = pcall(function() return mouse() end)
+    if ok then return res end
+  end
+  return nil
+end
+
+local function call_save(path, content)
+  if type(project) == "table" and type(project.write) == "function" then
+    local ok, res = pcall(function() return project.write(path, content) end)
+    if ok then return res end
+  end
+  if is_func(save_file) then
+    local ok, res = pcall(function() return save_file(path, content) end)
+    if ok then return res end
+  end
+  return false
+end
+
+local function call_read(path)
+  if type(project) == "table" and type(project.read) == "function" then
+    local ok, res = pcall(function() return project.read(path) end)
+    if ok then return res end
+  end
+  if is_func(load_file) then
+    local ok, res = pcall(function() return load_file(path) end)
+    if ok then return res end
+  end
+  return nil
+end
+
+local function call_run(path)
+  if is_func(run_project) then
+    local ok, res = pcall(function() return run_project(path) end)
+    if ok then return res end
+  end
+  return false
+end
+
+local function call_import_dialog()
+  if is_func(import_file_dialog) then
+    local ok, res = pcall(function() return import_file_dialog() end)
+    if ok then return res end
+  end
+  return nil
+end
+
+local function call_set_editor_font_size(px)
+  if is_func(set_editor_font_size) then
+    local ok, res = pcall(function() return set_editor_font_size(px) end)
+    if ok then
+      return res
+    end
+  end
+  return nil
+end
+
+local function call_toast(msg, secs)
+  if is_func(toast) then pcall(function() toast(msg) end) end
+  if is_func(toast_with_time) and secs then pcall(function() toast_with_time(msg, secs) end) end
 end
 
 -- ============================================================================
--- 5. SYNTAX
+-- CONTROL BAR
 -- ============================================================================
+local controls = {
+  height = 40,
+  buttons = {
+    {id = "save", label = "Save", x = 10, w = 80},
+    {id = "run",  label = "Run",  x = 100, w = 80}
+  }
+}
 
+local function safe_col(c) return c or 7 end
+
+-- ============================================================================
+-- KEYCODES (LibGDX mapping fallback names)
+-- ============================================================================
+KEY_UP=19; KEY_DOWN=20; KEY_LEFT=21; KEY_RIGHT=22
+KEY_HOME=3; KEY_END=123; KEY_PGUP=92; KEY_PGDN=93
+KEY_ENTER=66; KEY_BACK=67; KEY_TAB=61; KEY_DEL=112; KEY_SPACE=62
+KEY_SHIFT_L=59; KEY_SHIFT_R=60
+KEY_CTRL_L=129; KEY_CTRL_R=130
+KEY_ALT_L=57; KEY_ALT_R=58
+KEY_A=29; KEY_C=31; KEY_F=34; KEY_R=46; KEY_S=47
+KEY_V=50; KEY_X=52; KEY_Y=53; KEY_Z=54
+KEY_MINUS = 69
+KEY_EQUALS = 70
+
+-- ============================================================================
+-- BUFFER & TAB MANAGEMENT
+-- ============================================================================
+local tabs = {}
+local current_tab = 1
+local current_file = "main.lua"
+local untitled_counter = 1
+
+-- Helper to split text into lines (preserve trailing empty line)
+local function split_lines_from_text(txt)
+  if not txt or txt == "" then return {""} end
+  local lines = {}
+  local pos = 1
+  for line in string.gmatch(txt, "([^\n]*)\n?") do
+    table.insert(lines, line)
+  end
+  return lines
+end
+
+local function make_undostack()
+  local UndoStack = {}
+  UndoStack.__index = UndoStack
+  function UndoStack.new()
+    local u = setmetatable({}, UndoStack)
+    u.stack = {}
+    u.position = 0
+    return u
+  end
+  function UndoStack:push(state)
+    while #self.stack > self.position do table.remove(self.stack) end
+    table.insert(self.stack, state)
+    self.position = #self.stack
+    if #self.stack > 100 then
+      table.remove(self.stack, 1)
+      self.position = self.position - 1
+    end
+  end
+  function UndoStack:undo()
+    if self.position > 1 then
+      self.position = self.position - 1
+      return self.stack[self.position]
+    end
+    return nil
+  end
+  function UndoStack:redo()
+    if self.position < #self.stack then
+      self.position = self.position + 1
+      return self.stack[self.position]
+    end
+    return nil
+  end
+  return UndoStack.new()
+end
+
+local function buffer_new(path, text)
+  local b = {}
+  b.path = path or nil
+  b.lines = split_lines_from_text(text or "")
+  b.clipboard = ""
+  b.undo = make_undostack()
+  b.cx = 0; b.cy = 1; b.scroll_y = 0
+  b.sel_start_x, b.sel_start_y, b.sel_end_x, b.sel_end_y = nil, nil, nil, nil
+  b.modified = false
+  b.blink = 0
+  b.bracket_match = nil
+  b.mouse_selecting = false
+  b.find_mode = false
+  return b
+end
+
+local function open_tab(path, content)
+  local b = buffer_new(path, content)
+  table.insert(tabs, b)
+  current_tab = #tabs
+  if path then current_file = path end
+  return b
+end
+
+local function close_tab(idx)
+  if idx < 1 or idx > #tabs then return end
+  table.remove(tabs, idx)
+  if current_tab > #tabs then current_tab = math.max(1, #tabs) end
+end
+
+-- On startup, prefer loading project's main.lua if present; otherwise open a blank main.lua
+if #tabs == 0 then
+  local loaded = nil
+  if type(project) == "table" and type(project.read) == "function" then
+    local ok, content = pcall(function() return project.read("main.lua") end)
+    if ok and content and #content > 0 then loaded = content end
+  else
+    local ok, content = pcall(function() if type(load_file) == "function" then return load_file("main.lua") end end)
+    if ok and content and #content > 0 then loaded = content end
+  end
+  if loaded then
+    open_tab("main.lua", loaded)
+  else
+    open_tab("main.lua", "-- New file\n")
+  end
+end
+
+-- ensure current_tab is valid before any cur() use
+local function ensure_current_tab()
+  if #tabs == 0 then
+    local loaded = nil
+    if type(project) == "table" and type(project.read) == "function" then
+      local ok, content = pcall(function() return project.read("main.lua") end)
+      if ok and content and #content > 0 then loaded = content end
+    end
+    if loaded then open_tab("main.lua", loaded) else open_tab("main.lua", "-- New file\n") end
+  end
+  if current_tab < 1 then current_tab = 1 end
+  if current_tab > #tabs then current_tab = #tabs end
+end
+
+local function cur()
+  ensure_current_tab()
+  return tabs[current_tab]
+end
+
+local function get_state()
+  local st = {}
+  local b = cur()
+  for i, ln in ipairs(b.lines) do st[i] = ln end
+  return st
+end
+
+local function restore_state(s)
+  local b = cur()
+  b.lines = {}
+  for i, ln in ipairs(s) do b.lines[i] = ln end
+end
+
+-- ============================================================================
+-- SYNTAX HIGHLIGHTING (very simple)
+-- ============================================================================
 local Syntax = {}
 Syntax.__index = Syntax
-
 function Syntax.new()
-  local self = setmetatable({}, Syntax)
-  -- Updated to use theme.Colors
-  self.patterns = {
-    { "^%-%-.*", theme.Colors.SyntaxComment },
-    { '^".-"', theme.Colors.SyntaxString },
-    { "^'.-'", theme.Colors.SyntaxString },
-    { "^0x%x+", theme.Colors.SyntaxNumber },
-    { "^%d+%.?%d*", theme.Colors.SyntaxNumber },
-    { "^[%a_][%w_]*", "word" },
-    { "^.", theme.Colors.TextPrimary }
+  local s = setmetatable({}, Syntax)
+  s.keywords = {
+    ["and"]=1,["break"]=1,["do"]=1,["else"]=1,["elseif"]=1,["end"]=1,
+    ["false"]=1,["for"]=1,["function"]=1,["if"]=1,["in"]=1,["local"]=1,
+    ["nil"]=1,["not"]=1,["or"]=1,["repeat"]=1,["return"]=1,["then"]=1,
+    ["true"]=1,["until"]=1,["while"]=1
   }
-  self.keywords = {
-    ["if"]=1, ["then"]=1, ["else"]=1, ["elseif"]=1, ["end"]=1,
-    ["function"]=1, ["local"]=1, ["return"]=1, ["while"]=1,
-    ["do"]=1, ["for"]=1, ["in"]=1, ["break"]=1
+  s.funcs = {}
+  for k,_ in pairs(api_docs or {}) do s.funcs[k] = 1 end
+  s.patterns = {
+    {"^%-%-.*", config.colors.comment},
+    {'^"[^"]*"', config.colors.str},
+    {"^'[^']*'", config.colors.str},
+    {"^0x%x+", config.colors.num},
+    {"^%d+%.?%d*", config.colors.num},
+    {"^[%a_][%w_]*", "word"},
+    {"^[%+%-*/%^%%#=<>~]+", config.colors.text},
+    {"^[%(%)%[%]{}.,;:]", "word"},
+    {"^%s+", "skip"},
+    {"^.", config.colors.text}
   }
-  self.funcs = {
-    ["print"]=1, ["rect"]=1, ["cls"]=1, ["btn"]=1, ["mouse"]=1
-  }
-  return self
+  return s
 end
 
 function Syntax:parse(text)
+  if not text then return {} end
   local tokens = {}
   local pos = 1
   while pos <= #text do
-    local matched = false
-    local sub = string.sub(text, pos)
-    for _, rule in ipairs(self.patterns) do
-      local s, e = string.find(sub, rule[1])
+    local sub = string.sub(text, pos); local matched = false
+    for _, pattern in ipairs(self.patterns) do
+      local s,e = string.find(sub, pattern[1])
       if s == 1 then
-        local content = string.sub(sub, s, e)
-        local col = rule[2]
+        local token_text = string.sub(sub, s, e)
+        local col = pattern[2]
         if col == "word" then
-          if self.keywords[content] then col = theme.Colors.SyntaxKeyword
-          elseif self.funcs[content] then col = theme.Colors.SyntaxFunc
-          else col = theme.Colors.TextPrimary end
-        end
-        table.insert(tokens, { text = content, color = col })
+          local ch = token_text
+          if self.keywords[ch] then col = config.colors.keyword
+          elseif self.funcs[ch] then col = config.colors.func
+          elseif ch == "(" or ch == ")" or ch == "[" or ch == "]" or ch == "{" or ch == "}" then
+            col = config.colors.text
+            table.insert(tokens, {text = ch, color = col, bracket = true})
+            pos = pos + 1; matched = true; break
+          else col = config.colors.text end
+        elseif col == "skip" then pos = pos + (e - s + 1); matched = true; break end
+        table.insert(tokens, {text = token_text, color = col})
         pos = pos + (e - s + 1); matched = true; break
       end
     end
@@ -188,493 +369,491 @@ function Syntax:parse(text)
   return tokens
 end
 
--- ============================================================================
--- 6. DOCUMENT
--- ============================================================================
+local syntax = Syntax.new()
 
-local Doc = {}
-Doc.__index = Doc
-
-function Doc.new(filename)
-  local self = setmetatable({}, Doc)
-  self.lines = {""}
-  self.filename = filename or "main.lua"
-  self.undo_stack = {}
-  self.modified = false
-  return self
+-- ============================================================================
+-- SELECTION HELPERS
+-- ============================================================================
+local function buffer_has_selection(buf)
+  return buf.sel_start_x and buf.sel_start_y and buf.sel_end_x and buf.sel_end_y and not (buf.sel_start_x == buf.sel_end_x and buf.sel_start_y == buf.sel_end_y)
 end
 
-function Doc:load()
-  local c = project.read(self.filename)
-  if c and #c > 0 then
-    self.lines = split(c, "\n")
+local function get_selection_bounds(buf)
+  if not buffer_has_selection(buf) then return nil end
+  local sy,sx = buf.sel_start_y, buf.sel_start_x; local ey,ex = buf.sel_end_y, buf.sel_end_x
+  if sy > ey or (sy == ey and sx > ex) then sy,sx,ey,ex = ey,ex,sy,sx end
+  return sy,sx,ey,ex
+end
+
+local function get_selected_text(buf)
+  local sy,sx,ey,ex = get_selection_bounds(buf)
+  if not sy then return "" end
+  if sy == ey then return string.sub(buf.lines[sy] or "", sx + 1, ex) end
+  local res = string.sub(buf.lines[sy] or "", sx + 1) .. "\n"
+  for i = sy + 1, ey - 1 do res = res .. (buf.lines[i] or "") .. "\n" end
+  res = res .. string.sub(buf.lines[ey] or "", 1, ex)
+  return res
+end
+
+local function delete_selection(buf)
+  local sy,sx,ey,ex = get_selection_bounds(buf)
+  if not sy then return end
+  buf.undo:push(get_state())
+  if sy == ey then
+    local line = buf.lines[sy] or ""
+    buf.lines[sy] = string.sub(line, 1, sx) .. string.sub(line, ex + 1)
   else
-    self.lines = {
-      "-- New Project",
-      "function _init()",
-      "  cls(0)",
-      "  print('Hello World', 80, 60, 12)",
-      "end",
-      "",
-      "function _update()",
-      "  -- update logic",
-      "end",
-      "",
-      "function _draw()",
-      "  -- draw logic",
-      "end"
-    }
+    local first = string.sub(buf.lines[sy] or "", 1, sx)
+    local last = string.sub(buf.lines[ey] or "", ex + 1)
+    buf.lines[sy] = first .. last
+    for i = ey, sy + 1, -1 do table.remove(buf.lines, i) end
   end
-  self.undo_stack = {}
-  self.modified = false
+  buf.cy, buf.cx = sy, sx
+  buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil, nil, nil, nil
+  buf.modified = true
 end
 
-function Doc:save()
-  project.write(self.filename, table.concat(self.lines, "\n"))
-  self.modified = false
-end
-
-function Doc:snapshot()
-  if #self.undo_stack > config.undo_limit then
-    table.remove(self.undo_stack, 1)
-  end
-  local s = {}
-  for i, l in ipairs(self.lines) do s[i] = l end
-  table.insert(self.undo_stack, s)
-end
-
-function Doc:undo()
-  if #self.undo_stack > 0 then
-    self.lines = table.remove(self.undo_stack)
-    self.modified = true
-    return true
-  end
-  return false
-end
-
-function Doc:insert(y, x, text)
-  self:snapshot()
-  self.modified = true
-  local line = self.lines[y] or ""
-  local pre = string.sub(line, 1, x)
-  local post = string.sub(line, x + 1)
-
-  if string.find(text, "\n") then
-    local parts = split(text, "\n")
-    self.lines[y] = pre .. parts[1]
-    for i = 2, #parts - 1 do
-      table.insert(self.lines, y + i - 1, parts[i])
+local function find_matching_bracket(buf, line, col)
+  local line_text = buf.lines[line] or ""
+  local ch = string.sub(line_text, col + 1, col + 1)
+  if not ch or ch == "" then return nil end
+  local open_chars = {["("]=")", ["["]="]", ["{"]="}"}
+  local close_chars = {[")"]="(", ["]"]="[", ["}"]="{"}
+  if open_chars[ch] then
+    local target,depth = open_chars[ch],1
+    for y = line, #buf.lines do
+      local text = buf.lines[y] or ""; local start_col = (y==line) and (col+2) or 1
+      for x = start_col, #text do
+        local c = string.sub(text,x,x)
+        if c == ch then depth = depth + 1
+        elseif c == target then depth = depth - 1; if depth == 0 then return {y,x-1} end end
+      end
     end
-    table.insert(self.lines, y + #parts - 1, parts[#parts] .. post)
-    return y + #parts - 1, #parts[#parts]
-  else
-    self.lines[y] = pre .. text .. post
-    return y, x + #text
+  elseif close_chars[ch] then
+    local target,depth = close_chars[ch],1
+    for y = line, 1, -1 do
+      local text = buf.lines[y] or ""; local start_col = (y==line) and col or #text
+      for x = start_col, 1, -1 do
+        local c = string.sub(text,x,x)
+        if c == ch then depth = depth + 1
+        elseif c == target then depth = depth - 1; if depth == 0 then return {y,x-1} end end
+      end
+    end
   end
-end
-
-function Doc:remove(y, x, count)
-  self:snapshot()
-  self.modified = true
-  local line = self.lines[y] or ""
-  if x + count <= #line then
-    self.lines[y] = string.sub(line, 1, x) .. string.sub(line, x + count + 1)
-  elseif y < #self.lines then
-    self.lines[y] = string.sub(line, 1, x) .. (self.lines[y + 1] or "")
-    table.remove(self.lines, y + 1)
-  end
-end
-
--- ============================================================================
--- 7. INPUT WRAPPER
--- ============================================================================
-
-local Input = {}
-
-function Input.isCtrlDown()
-  if input and input.isCtrlDown then return input.isCtrlDown() end
-  return btn(Keys.CONTROL_LEFT) or btn(Keys.CONTROL_RIGHT)
-end
-
-function Input.isShiftDown()
-  if input and input.isShiftDown then return input.isShiftDown() end
-  return btn(Keys.SHIFT_LEFT) or btn(Keys.SHIFT_RIGHT)
-end
-
-function Input.isKeyJustPressed(keyCode)
-  return btnp(keyCode)
-end
-
-function Input.getChar()
-  if input and input.getNextChar then return input.getNextChar() end
-  if char then return char() end
   return nil
 end
 
 -- ============================================================================
--- 8. VIEW (EDITOR)
+-- INPUT HELPERS
 -- ============================================================================
-
-local View = {}
-View.__index = View
-
-function View.new(doc)
-  local self = setmetatable({}, View)
-  self.doc = doc
-  self.syntax = Syntax.new()
-  self.cx = 0; self.cy = 1
-  self.sx = 0; self.sy = 1
-  self.scroll_x = 0; self.scroll_y = 0
-  self.gutter_w = 40
-  self.msg = ""; self.msg_timer = 0; self.blink = 0
-  return self
+local function is_ctrl()
+  return btn_safe(KEY_CTRL_L) or btn_safe(KEY_CTRL_R)
+end
+local function is_shift()
+  return btn_safe(KEY_SHIFT_L) or btn_safe(KEY_SHIFT_R)
 end
 
-function View:toast(msg)
-  self.msg = msg; self.msg_timer = 120
-end
-
-function View:has_sel()
-  return self.sx ~= self.cx or self.sy ~= self.cy
-end
-
-function View:clear_sel()
-  self.sx, self.sy = self.cx, self.cy
-end
-
-function View:get_sel()
-  if self.sy < self.cy or (self.sy == self.cy and self.sx < self.cx) then
-    return self.sx, self.sy, self.cx, self.cy
+local function change_font_size_by(delta)
+  config.font_size = (config.font_size or 20) + delta
+  if config.font_size < 8 then config.font_size = 8 end
+  local tbl = call_set_editor_font_size and call_set_editor_font_size(config.font_size) or nil
+  if tbl and type(tbl) == "table" then
+    config.font_w = tbl.font_w or config.font_w
+    config.font_h = tbl.font_h or config.font_h
+    local lh = tbl.line_h or config.line_h or (config.font_h + 6)
+    lh = math.max(lh, math.floor((config.font_h or 16) * 1.35) + 2)
+    config.line_h = lh
   else
-    return self.cx, self.cy, self.sx, self.sy
+    config.line_h = math.max(config.line_h, math.floor((config.font_h or 16) * 1.35) + 2)
   end
+  call_toast("Font size: " .. tostring(config.font_size), 1.2)
 end
 
-function View:del_sel()
-  if not self:has_sel() then return end
-  local x1, y1, x2, y2 = self:get_sel()
-  self.doc:snapshot()
-  local l1 = self.doc.lines[y1]
-  local l2 = self.doc.lines[y2]
-  self.doc.lines[y1] = string.sub(l1, 1, x1) .. string.sub(l2, x2 + 1)
-  for i = 1, (y2 - y1) do
-    table.remove(self.doc.lines, y1 + 1)
-  end
-  self.cx, self.cy = x1, y1
-  self:clear_sel()
-end
+-- ============================================================================
+-- KEYBOARD HANDLING
+-- ============================================================================
+local function handle_keyboard()
+  ensure_current_tab()
+  local buf = cur()
+  if not buf then return end
+  buf.blink = (buf.blink or 0) + 1
 
-function View:handle_input()
-  local is_ctrl = Input.isCtrlDown()
-  local is_shift = Input.isShiftDown()
+  local ctrl = is_ctrl()
+  local shift = is_shift()
 
-  if is_ctrl then
-    if Input.isKeyJustPressed(Keys.S) then
-      self.doc:save(); self:toast("Saved!"); self.blink = 0; return
+  if ctrl then
+    if btnp_safe(KEY_TAB) then
+      if shift then current_tab = current_tab - 1; if current_tab < 1 then current_tab = #tabs end
+      else current_tab = current_tab + 1; if current_tab > #tabs then current_tab = 1 end end
+      return
     end
-    if Input.isKeyJustPressed(Keys.Z) then
-      if self.doc:undo() then
-        self.cy = clamp(self.cy, 1, #self.doc.lines)
-        self.cx = clamp(self.cx, 0, #self.doc.lines[self.cy])
-        self:toast("Undo")
+
+    local ch = kbchar()
+    while ch do
+      if ch == "+" or ch == "=" then change_font_size_by(2); return end
+      if ch == "-" then change_font_size_by(-2); return end
+      ch = kbchar()
+    end
+    if btnp_safe(KEY_EQUALS) then change_font_size_by(2); return end
+    if btnp_safe(KEY_MINUS) then change_font_size_by(-2); return end
+
+    if btnp_safe(KEY_C) then if buffer_has_selection(buf) then buf.clipboard = get_selected_text(buf) end; return end
+    if btnp_safe(KEY_V) then
+      if buf.clipboard and #buf.clipboard > 0 then
+        buf.undo:push(get_state())
+        if buffer_has_selection(buf) then delete_selection(buf) end
+        local line = buf.lines[buf.cy] or ""
+        local before = string.sub(line,1,buf.cx)
+        local after = string.sub(line, buf.cx+1)
+        local lines = {}
+        for s in string.gmatch(buf.clipboard, "([^\n]*)\n?") do table.insert(lines, s) end
+        if #lines == 0 then return end
+        buf.lines[buf.cy] = before .. lines[1]
+        for i = 2, #lines do table.insert(buf.lines, buf.cy + i -1, lines[i]) end
+        if #lines > 1 then buf.cy = buf.cy + #lines -1; buf.cx = #lines[#lines] else buf.cx = buf.cx + #lines[1] end
+        buf.modified = true
       end
-      self.blink = 0; return
+      return
     end
-    if Input.isKeyJustPressed(Keys.R) then
-      self.doc:save()
-      if sys and sys.run then sys.run() end
-      self.blink = 0; return
+    if btnp_safe(KEY_X) then if buffer_has_selection(buf) then buf.clipboard = get_selected_text(buf); delete_selection(buf) end; return end
+    if btnp_safe(KEY_Z) then local s = buf.undo:undo(); if s then buf.lines = s end; return end
+    if btnp_safe(KEY_Y) then local s = buf.undo:redo(); if s then buf.lines = s end; return end
+    if btnp_safe(KEY_F) then buf.find_mode = not buf.find_mode; return end
+    if btnp_safe(KEY_S) then local path = buf.path or current_file; local ok = call_save(path, table.concat(buf.lines, "\n")); if ok then buf.path = path; buf.modified = false; call_toast("Saved " .. path, 1.2) end; return end
+    if btnp_safe(KEY_R) then local path = buf.path or current_file; call_run(path); call_toast("Running " .. path, 1.2); return end
+  end
+
+  if btnp_safe(KEY_LEFT) then
+    if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end
+    if buf.cx > 0 then buf.cx = buf.cx - 1 elseif buf.cy > 1 then buf.cy = buf.cy -1; buf.cx = #(buf.lines[buf.cy] or "") end
+    if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end
+    return
+  end
+  if btnp_safe(KEY_RIGHT) then
+    if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end
+    if buf.cx < #(buf.lines[buf.cy] or "") then buf.cx = buf.cx + 1 elseif buf.cy < #buf.lines then buf.cy = buf.cy +1; buf.cx = 0 end
+    if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end
+    return
+  end
+  if btnp_safe(KEY_UP) then if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end; if buf.cy > 1 then buf.cy = buf.cy - 1; buf.cx = math.min(buf.cx, #(buf.lines[buf.cy] or "")) end; if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end; return end
+  if btnp_safe(KEY_DOWN) then if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end; if buf.cy < #buf.lines then buf.cy = buf.cy + 1; buf.cx = math.min(buf.cx, #(buf.lines[buf.cy] or "")) end; if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end; return end
+  if btnp_safe(KEY_HOME) then buf.cx = 0; return end
+  if btnp_safe(KEY_END) then buf.cx = #(buf.lines[buf.cy] or ""); return end
+  if btnp_safe(KEY_PGUP) then buf.cy = math.max(1, buf.cy - 10); return end
+  if btnp_safe(KEY_PGDN) then buf.cy = math.min(#buf.lines, buf.cy + 10); return end
+
+  if btnp_safe(KEY_BACK) then
+    if buffer_has_selection(buf) then delete_selection(buf) else
+      buf.undo:push(get_state())
+      if buf.cx > 0 then local line = buf.lines[buf.cy] or ""; buf.lines[buf.cy] = string.sub(line,1,buf.cx -1) .. string.sub(line, buf.cx + 1); buf.cx = buf.cx - 1
+      elseif buf.cy > 1 then local current = buf.lines[buf.cy] or ""; local prev = buf.lines[buf.cy -1] or ""; buf.cx = #prev; buf.lines[buf.cy -1] = prev .. current; table.remove(buf.lines, buf.cy); buf.cy = buf.cy - 1 end
+      buf.modified = true
     end
-    if Input.isKeyJustPressed(Keys.A) then
-      self:select_all(); self.blink = 0; return
+    return
+  end
+
+  if btnp_safe(KEY_DEL) then
+    if buffer_has_selection(buf) then delete_selection(buf) else
+      buf.undo:push(get_state())
+      local line = buf.lines[buf.cy] or ""
+      if buf.cx < #line then buf.lines[buf.cy] = string.sub(line,1,buf.cx) .. string.sub(line, buf.cx + 2)
+      elseif buf.cy < #buf.lines then local next_line = buf.lines[buf.cy + 1] or ""; buf.lines[buf.cy] = line .. next_line; table.remove(buf.lines, buf.cy + 1) end
+      buf.modified = true
     end
-    if Input.isKeyJustPressed(Keys.C) then
-      self:copy(); self.blink = 0; return
+    return
+  end
+
+  if btnp_safe(KEY_ENTER) then
+    buf.undo:push(get_state())
+    if buffer_has_selection(buf) then delete_selection(buf) end
+    local line = buf.lines[buf.cy] or ""
+    local before = string.sub(line,1,buf.cx); local after = string.sub(line, buf.cx + 1)
+    local spaces = string.match(before, "^(%s*)") or ""; local indent = #spaces
+    local trimmed = string.match(before, "^%s*(.-)%s*$")
+    if trimmed and (trimmed:match("^function") or trimmed:match("^if") or trimmed:match("^for") or trimmed:match("^while") or trimmed:match("^repeat") or trimmed == "do" or trimmed:match("then%s*$")) then indent = indent + config.tab_width end
+    buf.lines[buf.cy] = before; table.insert(buf.lines, buf.cy + 1, string.rep(" ", indent) .. after); buf.cy = buf.cy + 1; buf.cx = indent; buf.modified = true
+    return
+  end
+
+  if btnp_safe(KEY_TAB) then
+    buf.undo:push(get_state())
+    if buffer_has_selection(buf) then delete_selection(buf) end
+    local spaces = string.rep(" ", config.tab_width)
+    local line = buf.lines[buf.cy] or ""
+    buf.lines[buf.cy] = string.sub(line,1,buf.cx) .. spaces .. string.sub(line, buf.cx + 1)
+    buf.cx = buf.cx + config.tab_width
+    buf.modified = true
+    return
+  end
+
+  local ch = kbchar()
+  while ch do
+    if not ctrl then
+      buf.undo:push(get_state())
+      if buffer_has_selection(buf) then delete_selection(buf) end
+      local line = buf.lines[buf.cy] or ""
+      buf.lines[buf.cy] = string.sub(line,1,buf.cx) .. ch .. string.sub(line, buf.cx + 1)
+      buf.cx = buf.cx + 1
+      buf.modified = true
     end
-    if Input.isKeyJustPressed(Keys.V) then
-      self:paste(); self.blink = 0; return
+    ch = kbchar()
+  end
+end
+
+-- ============================================================================
+-- MOUSE / SELECTION / FONT SIZE SCROLL
+-- ============================================================================
+local old_mouse_click = false
+local old_mouse_right = false
+local context_open = false
+local context_tab = nil
+local context_x, context_y = 0, 0
+
+local function mouse_to_editor_pos(m, win_x, win_y, win_w, win_h)
+  ensure_current_tab()
+  local b = cur()
+  if not b then return 1, 0 end
+  local content_h = win_h - config.help_h - controls.height - 30
+  local content_top = win_y + win_h - controls.height - 30
+  local rel_x = m.x - (win_x + 40)
+  local dist_from_top = content_top - m.y
+  local line_idx = b.scroll_y + math.floor(dist_from_top / config.line_h) + 1
+  local col = math.floor((rel_x - 4) / config.font_w)
+  if col < 0 then col = 0 end
+  line_idx = math.max(1, math.min(#b.lines, line_idx))
+  col = math.max(0, math.min(#(b.lines[line_idx] or ""), col))
+  return line_idx, col
+end
+
+local function draw_tabs_bar(win_x, win_y, win_w, win_h)
+  local tb_y = win_y + win_h - controls.height - 30
+  if rect then rect(win_x, tb_y, win_w, 30, safe_col(config.colors.gutter_bg)) end
+  local tx = win_x + 8
+  for i,t in ipairs(tabs) do
+    local label = t.path or ("untitled" .. tostring(i))
+    local w = math.max(60, (#label + 2) * config.font_w)
+    if print then print(label, tx + 6, tb_y + 20, safe_col(i == current_tab and config.colors.help_example or config.colors.help_text)) end
+    if rect then rect(tx, tb_y + 6, w, 20, safe_col(i == current_tab and config.colors.help_bg or config.colors.gutter_bg)) end
+    tx = tx + w + 6
+  end
+  local plus_x = tx
+  if rect then rect(plus_x, tb_y + 6, 36, 20, safe_col(config.colors.help_bg)) end
+  if print then print("+", plus_x + 12, tb_y + 20, safe_col(config.colors.help_text)) end
+  return tb_y, plus_x
+end
+
+function _update(win_x, win_y, win_w, win_h)
+  win_x = win_x or 0; win_y = win_y or 0; win_w = win_w or config.win_min_width; win_h = win_h or config.win_min_height
+
+  handle_keyboard()
+
+  local m = get_mouse()
+  if m then
+    if m.scroll and m.scroll ~= 0 and is_ctrl() then
+      if m.scroll > 0 then change_font_size_by(2) else change_font_size_by(-2) end
     end
-    if Input.isKeyJustPressed(Keys.X) then
-      self:cut(); self.blink = 0; return
-    end
-    self:handle_mouse(); self.blink = self.blink + 1; return
-  end
 
-  if Input.isKeyJustPressed(Keys.ENTER) then
-    self:newline(); self.blink = 0; self:handle_mouse(); self.blink = self.blink + 1; return
-  end
-  if Input.isKeyJustPressed(Keys.BACKSPACE) then
-    self:backspace(); self.blink = 0; self:handle_mouse(); self.blink = self.blink + 1; return
-  end
-  if Input.isKeyJustPressed(Keys.DEL) then
-    self:delete_forward(); self.blink = 0; self:handle_mouse(); self.blink = self.blink + 1; return
-  end
-  if Input.isKeyJustPressed(Keys.TAB) then
-    self:insert_char("  "); self.blink = 0; self:handle_mouse(); self.blink = self.blink + 1; return
-  end
+    local content_h = win_h - config.help_h - controls.height - 30
+    local content_top = win_y + win_h - controls.height - 30
+    local editor_top = win_y + config.help_h
+    local editor_left = win_x + 40
+    local editor_right = win_x + win_w
 
-  if Input.isKeyJustPressed(Keys.UP) then self:move(0, -1, is_shift); self.blink = 0 end
-  if Input.isKeyJustPressed(Keys.DOWN) then self:move(0, 1, is_shift); self.blink = 0 end
-  if Input.isKeyJustPressed(Keys.LEFT) then self:move(-1, 0, is_shift); self.blink = 0 end
-  if Input.isKeyJustPressed(Keys.RIGHT) then self:move(1, 0, is_shift); self.blink = 0 end
-
-  local c = Input.getChar()
-  while c do
-    self:insert_char(c); self.blink = 0; c = Input.getChar()
-  end
-
-  self:handle_mouse(); self.blink = self.blink + 1
-end
-
-function View:insert_char(t)
-  if self:has_sel() then self:del_sel() end
-  self.cy, self.cx = self.doc:insert(self.cy, self.cx, t)
-  self:clear_sel(); self:scroll_to()
-end
-
-function View:newline()
-  if self:has_sel() then self:del_sel() end
-  self.doc:snapshot()
-  local l = self.doc.lines[self.cy]
-  local ind = string.match(l, "^%s*") or ""
-  if string.match(l, "then%s*$") or string.match(l, "do%s*$") or string.match(l, "function") then
-    ind = ind .. "  "
-  end
-  local pre = string.sub(l, 1, self.cx)
-  local post = string.sub(l, self.cx + 1)
-  self.doc.lines[self.cy] = pre
-  table.insert(self.doc.lines, self.cy + 1, ind .. post)
-  self.cy = self.cy + 1; self.cx = #ind
-  self:clear_sel(); self:scroll_to()
-end
-
-function View:backspace()
-  if self:has_sel() then self:del_sel()
-  elseif self.cx > 0 then
-    self.doc:remove(self.cy, self.cx - 1, 1); self.cx = self.cx - 1
-  elseif self.cy > 1 then
-    local prev_len = #self.doc.lines[self.cy - 1]
-    self.doc:remove(self.cy - 1, prev_len, 0)
-    self.cy = self.cy - 1; self.cx = prev_len
-  end
-  self:clear_sel(); self:scroll_to()
-end
-
-function View:delete_forward()
-  if self:has_sel() then self:del_sel()
-  elseif self.cx < #self.doc.lines[self.cy] then self.doc:remove(self.cy, self.cx, 1)
-  elseif self.cy < #self.doc.lines then self.doc:remove(self.cy, self.cx, 0)
-  end
-  self:clear_sel(); self:scroll_to()
-end
-
-function View:select_all()
-  self.sx, self.sy = 0, 1
-  self.cy = #self.doc.lines; self.cx = #self.doc.lines[self.cy]
-end
-
-function View:copy()
-  if not self:has_sel() then return end
-  local x1, y1, x2, y2 = self:get_sel()
-  local t = ""
-  if y1 == y2 then t = string.sub(self.doc.lines[y1], x1 + 1, x2)
-  else
-    t = string.sub(self.doc.lines[y1], x1 + 1) .. "\n"
-    for i = y1 + 1, y2 - 1 do t = t .. self.doc.lines[i] .. "\n" end
-    t = t .. string.sub(self.doc.lines[y2], 1, x2)
-  end
-  if clipboard then clipboard(t); self:toast("Copied") end
-end
-
-function View:paste()
-  if not clipboard then return end
-  local t = clipboard()
-  if t and t ~= "" then
-    if self:has_sel() then self:del_sel() end
-    self.cy, self.cx = self.doc:insert(self.cy, self.cx, t)
-    self:clear_sel(); self:scroll_to()
-  end
-end
-
-function View:cut()
-  self:copy(); self:del_sel(); self:toast("Cut")
-end
-
-function View:move(dx, dy, sel)
-  if not sel then self:clear_sel() end
-  self.cy = clamp(self.cy + dy, 1, #self.doc.lines)
-  self.cx = clamp(self.cx + dx, 0, #self.doc.lines[self.cy])
-  if not sel then self.sx, self.sy = self.cx, self.cy end
-  self:scroll_to()
-end
-
-function View:scroll_to()
-  local sh = display_height()
-  local view_h = math.floor((sh - config.header_h - config.toolbar_h) / config.line_h)
-  if self.cy <= self.scroll_y then self.scroll_y = self.cy - 1 end
-  if self.cy > self.scroll_y + view_h then self.scroll_y = self.cy - view_h end
-  self.scroll_y = math.max(0, self.scroll_y)
-end
-
-function View:handle_mouse()
-  local m = mouse()
-  if not m then return end
-  local sw, sh = display_width(), display_height()
-
-  if m.scroll and m.scroll ~= 0 then
-    self.scroll_y = clamp(self.scroll_y - m.scroll, 0, math.max(0, #self.doc.lines - 5))
-  end
-
-  if m.click then
-    local header_y = sh - config.header_h - config.toolbar_h
-    local text_left_padding = config.text_left_padding
-    if m.y < header_y and m.x > self.gutter_w then
-      local dist_from_header = header_y - m.y
-      local line_offset = math.floor(dist_from_header / config.line_h)
-      local line_idx = self.scroll_y + line_offset + 1
-      if line_idx >= 1 and line_idx <= #self.doc.lines then
-        self.cy = line_idx
-        local text_x = m.x - self.gutter_w - text_left_padding
-        local char_x = math.floor(text_x / config.font_w) + self.scroll_x
-        self.cx = clamp(char_x, 0, #self.doc.lines[self.cy])
-        self:clear_sel()
+    if m.click and not old_mouse_click and m.y >= editor_top and m.y <= content_top and m.x >= editor_left and m.x <= editor_right then
+      ensure_current_tab()
+      local line_idx, col = mouse_to_editor_pos(m, win_x, win_y, win_w, win_h)
+      local b = cur()
+      if b then
+        b.sel_start_x, b.sel_start_y = col, line_idx
+        b.sel_end_x, b.sel_end_y = col, line_idx
+        b.mouse_selecting = true
+        b.cx, b.cy = col, line_idx
       end
     end
+
+    if m.left and old_mouse_click and cur() and cur().mouse_selecting then
+      local line_idx, col = mouse_to_editor_pos(m, win_x, win_y, win_w, win_h)
+      local b = cur()
+      if b then
+        b.sel_end_x, b.sel_end_y = col, line_idx
+        b.cx, b.cy = col, line_idx
+      end
+    end
+
+    if not m.left and old_mouse_click and cur() and cur().mouse_selecting then
+      local b = cur()
+      if b then b.mouse_selecting = false end
+    end
+
+    local cb_top = win_y + win_h - controls.height
+    local rel_x = m.x - win_x
+    local rel_y = m.y - cb_top
+    if m.click and not old_mouse_click and rel_y >= 0 and rel_y <= controls.height then
+      local local_x = rel_x
+      for _, b in ipairs(controls.buttons) do
+        if local_x >= b.x and local_x <= b.x + b.w then
+          if b.id == "save" then
+            ensure_current_tab()
+            local buf = cur()
+            if buf then
+              local ok = call_save(buf.path or current_file, table.concat(buf.lines, "\n"))
+              if ok then buf.path = buf.path or current_file; buf.modified = false; call_toast("Saved", 1.0) end
+            end
+          elseif b.id == "run" then
+            ensure_current_tab()
+            local buf = cur()
+            if buf then call_run(buf.path or current_file); call_toast("Running", 1.0) end
+          end
+        end
+      end
+    end
+
+    local tb_y, plus_x = draw_tabs_bar(win_x, win_y, win_w, win_h)
+    local tab_local_x = m.x - win_x
+    local tab_local_y = m.y - tb_y
+
+    if m.click and not old_mouse_click and tab_local_y >= 0 and tab_local_y <= 30 then
+      local tx = 8; local clicked_tab = nil
+      for i, t in ipairs(tabs) do
+        local label = t.path or ("untitled" .. tostring(i))
+        local w = math.max(60, (#label + 2) * config.font_w)
+        if tab_local_x >= tx and tab_local_x <= tx + w then clicked_tab = i; break end
+        tx = tx + w + 6
+      end
+      if clicked_tab then current_tab = clicked_tab else
+        if tab_local_x >= plus_x and tab_local_x <= plus_x + 36 then
+          untitled_counter = untitled_counter + 1
+          open_tab("untitled" .. tostring(untitled_counter) .. ".lua", "-- new file\n")
+          call_toast("New file opened", 1.0)
+        end
+      end
+    end
+
+    if m.right and not old_mouse_right then
+      local tb_y2, plus_x2 = draw_tabs_bar(win_x, win_y, win_w, win_h)
+      local tab_local_x2 = m.x - win_x
+      local tab_local_y2 = m.y - tb_y2
+      if tab_local_y2 >= 0 and tab_local_y2 <= 30 then
+        local tx = 8; local clicked_tab = nil
+        for i, t in ipairs(tabs) do
+          local label = t.path or ("untitled" .. tostring(i))
+          local w = math.max(60, (#label + 2) * config.font_w)
+          if tab_local_x2 >= tx and tab_local_x2 <= tx + w then clicked_tab = i; break end
+          tx = tx + w + 6
+        end
+        if clicked_tab then context_open = true; context_tab = clicked_tab; context_x, context_y = m.x, m.y end
+      end
+    end
+
+    if context_open and m.click and not old_mouse_click then
+      local menu_x, menu_y = context_x, context_y; local menu_w, menu_h = 160, 40
+      if m.x >= menu_x and m.x <= menu_x + menu_w and m.y >= menu_y - menu_h and m.y <= menu_y then
+        local rel = menu_y - m.y; local option = math.floor(rel / 20) + 1
+        if option == 1 then close_tab(context_tab); call_toast("Tab closed", 0.9)
+        elseif option == 2 then
+          local res = call_import_dialog()
+          if res and res.path and res.content then open_tab(res.path:match("([^/\\]+)$") or res.path, res.content); call_toast("Imported", 1.2)
+          else call_toast("Import cancelled", 1.2) end
+        end
+      end
+      context_open = false; context_tab = nil
+    end
+
+    old_mouse_click = m.click; old_mouse_right = m.right
   end
 end
 
-function View:draw()
-  cls(theme.Colors.Background) -- Using Theme
-  local sw, sh = display_width(), display_height()
+-- ============================================================================
+-- DRAW
+-- ============================================================================
+function _draw(win_x, win_y, win_w, win_h)
+  ensure_current_tab()
+  win_x = win_x or 0; win_y = win_y or 0; win_w = win_w or config.win_min_width; win_h = win_h or config.win_min_height
 
-  -- Toolbar at top
-  local toolbar_y = sh - config.toolbar_h
-  ui.toolbar(0, toolbar_y, sw, config.toolbar_h)
+  local content_h = win_h - config.help_h - controls.height - 30
+  local content_y = win_y + config.help_h
+  local content_top = win_y + win_h - controls.height - 30
 
-  local btn_x = 10
-  local btn_y = toolbar_y + 6
-  local btn_size = 24
+  if rect then rect(win_x, win_y, win_w, win_h, safe_col(config.colors.bg)) end
+  if rect then rect(win_x, content_y, 40, content_h, safe_col(config.colors.gutter_bg)) end
 
-  if ui.icon_button("S", btn_x, btn_y, btn_size) then
-    self.doc:save(); self:toast("Saved!")
-  end
-  btn_x = btn_x + btn_size + 5
-
-  if ui.icon_button("R", btn_x, btn_y, btn_size) then
-    self.doc:save()
-    if sys and sys.run then sys.run() end
-  end
-  btn_x = btn_x + btn_size + 5
-
-  if ui.icon_button("Z", btn_x, btn_y, btn_size) then
-    if self.doc:undo() then
-      self.cy = clamp(self.cy, 1, #self.doc.lines)
-      self.cx = clamp(self.cx, 0, #self.doc.lines[self.cy])
-      self:toast("Undo")
-    end
+  local cb_x = win_x; local cb_y = win_y + win_h - controls.height
+  if rect then rect(cb_x, cb_y, win_w, controls.height, safe_col(config.colors.gutter_bg)) end
+  for i,b in ipairs(controls.buttons) do
+    local bx,by,bw,bh = cb_x + b.x, cb_y + 6, b.w, controls.height - 12
+    if rect then rect(bx,by,bw,bh, safe_col(config.colors.help_bg)) end
+    if print then print(b.label, bx + 8, by + math.floor(bh/2) + (config.font_h/2) - 2, safe_col(config.colors.help_text)) end
   end
 
-  -- Header below toolbar
-  local header_y = toolbar_y - config.header_h
-  rect(0, header_y, sw, config.header_h, theme.Colors.PanelBackground) -- Using Theme
-  local title = self.doc.filename .. (self.doc.modified and " *" or "")
-  print(title, 10, header_y + 12, theme.Colors.TextPrimary) -- Using Theme
+  local tb_y, plus_x = draw_tabs_bar(win_x, win_y, win_w, win_h)
 
-  -- Content area
-  local content_height = header_y
-  local visible_lines = math.floor(content_height / config.line_h)
-  local digits = #tostring(#self.doc.lines)
-  self.gutter_w = math.max(40, digits * config.font_w + 20)
-  local text_left_padding = config.text_left_padding
+  local buf = cur()
+  if not buf then return end
 
-  local x1, y1, x2, y2 = self:get_sel()
-  local has_sel = self:has_sel()
+  local visible_lines = math.floor(content_h / config.line_h)
+  local sy,sx,ey,ex = get_selection_bounds(buf)
 
   for i = 0, visible_lines do
-    local idx = self.scroll_y + i + 1
-    if idx > #self.doc.lines then break end
-    local y = header_y - ((i + 1) * config.line_h)
-    if y < 0 then break end
-    local txt = self.doc.lines[idx]
+    local line_idx = buf.scroll_y + i + 1
+    if line_idx > #buf.lines then break end
+    local line_y = content_top - (i * config.line_h) - 4
+    if line_y < content_y then break end
 
-    rect(0, y, self.gutter_w, config.line_h, theme.Colors.Gutter) -- Using Theme
-    local n = tostring(idx)
-    local num_x = self.gutter_w - #n * config.font_w - 8
-    -- Fix: Line numbers use same baseline as text
-    local num_y = y + config.line_h - (config.line_h - config.font_h) / 2 - 4
-    print(n, num_x, num_y, theme.Colors.TextSecondary) -- Using Theme
+    if line_idx == buf.cy and rect then rect(win_x, line_y - config.font_h, win_w, config.line_h, safe_col(config.colors.current_line)) end
+    if print then print(tostring(line_idx), win_x + 4, line_y, safe_col(config.colors.gutter_fg)) end
 
-    if has_sel and idx >= y1 and idx <= y2 then
-      local sx, ex = 0, #txt
-      if idx == y1 then sx = x1 end
-      if idx == y2 then ex = x2 end
-      local px = self.gutter_w + text_left_padding + (sx - self.scroll_x) * config.font_w
-      local w = (ex - sx) * config.font_w
-      if w > 0 then rect(px, y, w, config.line_h, theme.Colors.Selection) end -- Using Theme
+    if sy and line_idx >= sy and line_idx <= ey and rect then
+      local sel_x_start = (line_idx == sy) and sx or 0
+      local sel_x_end = (line_idx == ey) and ex or #(buf.lines[line_idx] or "")
+      if sel_x_end > sel_x_start then
+        local sel_pixel_x = win_x + 40 + 4 + (sel_x_start * config.font_w)
+        local sel_pixel_w = (sel_x_end - sel_x_start) * config.font_w
+        rect(sel_pixel_x, line_y - config.font_h, sel_pixel_w, config.line_h, safe_col(config.colors.selection))
+      end
     end
 
-    local tokens = self.syntax:parse(txt)
-    local cur_x = 0
-    for _, t in ipairs(tokens) do
-      local px = self.gutter_w + text_left_padding + (cur_x - self.scroll_x) * config.font_w
-      -- Fix: Position text baseline at the correct height within the line
-      -- BitmapFont draws from baseline, so we need to offset from top of line
-      local text_y = y + config.line_h - (config.line_h - config.font_h) / 2 - 4
-      print(t.text, px, text_y, t.color)
-      cur_x = cur_x + #t.text
+    local tokens = syntax:parse(buf.lines[line_idx] or "")
+    local cur_x = win_x + 40 + 4
+    local char_pos = 0
+    for _, token in ipairs(tokens) do
+      if print and token.text then
+        local col = token.color
+        if token.bracket and buf.bracket_match then
+          local by,bx = buf.bracket_match[1], buf.bracket_match[2]
+          if (line_idx == buf.cy and char_pos == buf.cx) or (line_idx == by and char_pos == bx) then col = safe_col(config.colors.bracket) end
+        end
+        print(token.text, cur_x, line_y, col)
+        cur_x = cur_x + (#token.text * config.font_w)
+        char_pos = char_pos + #token.text
+      end
     end
 
-    if idx == self.cy and (self.blink % config.blink_rate < config.blink_rate / 2) then
-      local px = self.gutter_w + text_left_padding + (self.cx - self.scroll_x) * config.font_w
-      -- Fix: Cursor uses same baseline calculation as text
-      local cursor_y = y + config.line_h - (config.line_h - config.font_h) / 2 - 4 - config.font_h
-      rect(px, cursor_y, 2, config.font_h, theme.Colors.Caret) -- Using Theme
+    if line_idx == buf.cy and (buf.blink or 0) % 30 < 15 then
+      local cursor_x = win_x + 40 + 4 + (buf.cx * config.font_w)
+      if rect then rect(cursor_x, line_y - config.font_h, 2, config.line_h - 4, safe_col(config.colors.cursor)) end
     end
   end
 
-  local last_line_y = header_y - ((visible_lines + 1) * config.line_h)
-  if last_line_y > 0 then
-    rect(0, 0, self.gutter_w, last_line_y, theme.Colors.Gutter) -- Using Theme
-  end
-
-  if self.msg_timer > 0 then
-    local toast_w = #self.msg * config.font_w + 20
-    local toast_h = config.font_h + 20
-    local toast_x = sw / 2 - toast_w / 2
-    local toast_y = config.line_h * 3
-    rect(toast_x, toast_y, toast_w, toast_h, theme.Colors.ToastBg) -- Using Theme
-    print(self.msg, toast_x + 10, toast_y + 10, theme.Colors.TextPrimary) -- Using Theme
-    self.msg_timer = self.msg_timer - 1
+  if rect then rect(win_x, win_y, win_w, config.help_h, safe_col(config.colors.help_bg)) end
+  if print then
+    local stats = string.format("Tab %d/%d  Line %d  Col %d  %d lines", current_tab, #tabs, buf.cy, buf.cx + 1, #buf.lines)
+    print(stats, win_x + 4, win_y + 20, safe_col(config.colors.comment))
+    print("Ctrl+C/V/X Copy/Paste/Cut  Ctrl+Z/Y Undo/Redo  Ctrl+F Find  Ctrl+S Save  Ctrl+R Run  Ctrl+Tab Switch Tab  Ctrl+/- Font", win_x + 4, win_y + 36, safe_col(config.colors.comment))
   end
 end
 
 -- ============================================================================
--- 9. MAIN
+-- EXPOSE API
 -- ============================================================================
-
-local editor = nil
-
-function _init()
-  if font_width then
-    config.font_w = font_width() + 1
-  end
-  if font_height then
-    config.font_h = font_height()
-    config.line_h = math.floor(config.font_h * 1.25)
-    config.text_offset_y = math.floor((config.line_h - config.font_h) * 0.3)
-    config.header_h = config.line_h * 2
-  end
-
-  local doc = Doc.new(filepath or "main.lua")
-  doc:load()
-  editor = View.new(doc)
-  editor:toast("Editor Ready")
+CodeEditor.open_tab = function(path, content) open_tab(path, content) end
+CodeEditor.close_tab = function(i) close_tab(i) end
+CodeEditor.current_tab_index = function() return current_tab end
+CodeEditor.get_tabs = function() return tabs end
+CodeEditor.save_current_tab = function()
+  ensure_current_tab(); local b = cur(); if b and call_save(b.path or current_file, table.concat(b.lines, "\n")) then b.modified = false; call_toast("Saved", 1.2) end
+end
+CodeEditor.run_current_tab = function()
+  ensure_current_tab(); local b = cur(); if b then call_run(b.path or current_file); call_toast("Running",1.2) end
 end
 
-function _update()
-  if editor then editor:handle_input() end
-end
-
-function _draw()
-  if editor then editor:draw() end
-end
+return CodeEditor

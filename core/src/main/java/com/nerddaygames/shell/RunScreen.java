@@ -25,10 +25,14 @@ public class RunScreen extends ScreenAdapter {
         this.batch = new SpriteBatch();
 
         Profile p = Profile.createNerdOS();
-        // Here you could read project.json to change resolution to 128x128 or whatever the user chose
 
         // Game has CPU timeout enabled (flag = 1)
         this.vm = new FantasyVM(p, 1);
+
+        // Set project directory on VM so editor run/save use the project folder
+        if (projectDir != null) {
+            vm.setProjectDir(projectDir);
+        }
 
         // FitViewport maintains aspect ratio (retro feel)
         this.viewport = new FitViewport(p.gameWidth, p.gameHeight);

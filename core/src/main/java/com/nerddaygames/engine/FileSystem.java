@@ -5,11 +5,23 @@ import com.badlogic.gdx.files.FileHandle;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * FileSystem - simple project/file abstraction.
+ * Added constructor that accepts a FileHandle for a custom storage root (used by FantasyVM.setProjectDir).
+ */
 public class FileSystem {
-    private final FileHandle storageRoot;
+    private FileHandle storageRoot;
 
+    // Default constructor: local disk/disk/ root
     public FileSystem() {
         this.storageRoot = Gdx.files.local("disk/");
+        if (!storageRoot.exists()) storageRoot.mkdirs();
+    }
+
+    // New constructor: explicit storage root (project directory)
+    public FileSystem(FileHandle root) {
+        if (root != null) this.storageRoot = root;
+        else this.storageRoot = Gdx.files.local("disk/");
         if (!storageRoot.exists()) storageRoot.mkdirs();
     }
 
@@ -34,12 +46,13 @@ public class FileSystem {
     public boolean write(String path, String content) {
         if (path.startsWith("/system")) return false;
         if (isPathInvalid(path)) return false;
-
+        if (content == null) return false;
         if (content.length() > 10 * 1024 * 1024) return false;
-
         try {
             FileHandle handle = storageRoot.child(cleanPath(path));
-            handle.writeString(content, false);
+            FileHandle parent = handle.parent();
+            if (parent != null && !parent.exists()) parent.mkdirs();
+            handle.writeString(content, false, "UTF-8");
             return true;
         } catch (Exception e) { return false; }
     }
@@ -51,24 +64,31 @@ public class FileSystem {
     }
 
     private boolean isPathInvalid(String path) {
-        return path.contains("..") || path.contains("~");
+        return path == null || path.contains("..") || path.contains("~");
     }
 
     public FileHandle resolve(String path) {
         path = cleanPath(path);
-        FileHandle userFile = storageRoot.child(path);
         try {
-            if (!userFile.file().getCanonicalPath().startsWith(storageRoot.file().getCanonicalPath())) {
-                return null;
-            }
-        } catch(Exception e) { return null; }
-        if (userFile.exists()) return userFile;
+            FileHandle userFile = storageRoot.child(path);
+            // ensure canonical path still within storageRoot
+            try {
+                if (userFile.file().getCanonicalPath().startsWith(storageRoot.file().getCanonicalPath())) {
+                    if (userFile.exists()) return userFile;
+                }
+            } catch (Exception ignored) {}
+        } catch (Exception ignored) {}
+
+        // fallback to internal assets
         FileHandle internalFile = Gdx.files.internal(path);
         if (internalFile.exists()) return internalFile;
-        return userFile;
+
+        // if not found, return a handle inside storage root (for create/write)
+        return storageRoot.child(path);
     }
 
     private String cleanPath(String path) {
+        if (path == null) return "";
         return path.replace("\\", "/").replaceAll("^/+", "");
     }
 }
