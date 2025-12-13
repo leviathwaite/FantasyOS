@@ -46,10 +46,13 @@ end
 -- ============================================================================
 -- UTF-8 HELPERS
 -- ============================================================================
+-- UTF-8 character boundary pattern (matches single UTF-8 codepoint)
+local UTF8_CHAR_PATTERN = "([%z\1-\127\194-\244][\128-\191]*)"
+
 local function utf8_char_count(s)
   if not s or s == "" then return 0 end
   local count = 0
-  for _ in string.gmatch(s, "([%z\1-\127\194-\244][\128-\191]*)") do count = count + 1 end
+  for _ in string.gmatch(s, UTF8_CHAR_PATTERN) do count = count + 1 end
   return count
 end
 
@@ -58,7 +61,7 @@ local function visual_to_byte_offset(s, visual_idx)
   if not s or s == "" or visual_idx <= 0 then return 0 end
   local count = 0
   local byte_pos = 0
-  for char in string.gmatch(s, "([%z\1-\127\194-\244][\128-\191]*)") do
+  for char in string.gmatch(s, UTF8_CHAR_PATTERN) do
     if count >= visual_idx then break end
     byte_pos = byte_pos + #char
     count = count + 1
@@ -575,8 +578,36 @@ local function handle_keyboard()
     if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end
     return
   end
-  if btnp_safe(KEY_UP) then if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end; if buf.cy > 1 then buf.cy = buf.cy - 1; buf.cx = math.min(buf.cx, utf8_char_count(buf.lines[buf.cy] or "")) end; if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end; return end
-  if btnp_safe(KEY_DOWN) then if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end; if buf.cy < #buf.lines then buf.cy = buf.cy + 1; buf.cx = math.min(buf.cx, utf8_char_count(buf.lines[buf.cy] or "")) end; if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end; return end
+  if btnp_safe(KEY_UP) then 
+    if shift and not buffer_has_selection(buf) then 
+      buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy 
+    end
+    if buf.cy > 1 then 
+      buf.cy = buf.cy - 1
+      buf.cx = math.min(buf.cx, utf8_char_count(buf.lines[buf.cy] or ""))
+    end
+    if shift then 
+      buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy 
+    else 
+      buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil 
+    end
+    return 
+  end
+  if btnp_safe(KEY_DOWN) then 
+    if shift and not buffer_has_selection(buf) then 
+      buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy 
+    end
+    if buf.cy < #buf.lines then 
+      buf.cy = buf.cy + 1
+      buf.cx = math.min(buf.cx, utf8_char_count(buf.lines[buf.cy] or ""))
+    end
+    if shift then 
+      buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy 
+    else 
+      buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil 
+    end
+    return 
+  end
   if btnp_safe(KEY_HOME) then buf.cx = 0; return end
   if btnp_safe(KEY_END) then buf.cx = utf8_char_count(buf.lines[buf.cy] or ""); return end
   if btnp_safe(KEY_PGUP) then buf.cy = math.max(1, buf.cy - 10); return end
@@ -589,14 +620,18 @@ local function handle_keyboard()
   end
 
   if btnp_safe(KEY_BACK) or (_back_repeat > BACK_INITIAL_DELAY and ((_back_repeat - BACK_INITIAL_DELAY) % BACK_REPEAT_INTERVAL == 0)) then
-    if buffer_has_selection(buf) then delete_selection(buf) else
+    if buffer_has_selection(buf) then 
+      delete_selection(buf)
+    else
       buf.undo:push(get_state())
       if buf.cx > 0 then
         local line = buf.lines[buf.cy] or ""
         local byte_pos = visual_to_byte_offset(line, buf.cx)
         local before = string.sub(line, 1, byte_pos)
         local after = string.sub(line, byte_pos + 1)
-        before = string.gsub(before, "([%z\1-\127\194-\244][\128-\191]*)$", "")
+        -- Remove last UTF-8 codepoint from before
+        local new_before = string.gsub(before, UTF8_CHAR_PATTERN .. "$", "")
+        if new_before then before = new_before end
         buf.lines[buf.cy] = before .. after
         buf.cx = math.max(0, buf.cx - 1)
       elseif buf.cy > 1 then
@@ -613,7 +648,9 @@ local function handle_keyboard()
   end
 
   if btnp_safe(KEY_DEL) then
-    if buffer_has_selection(buf) then delete_selection(buf) else
+    if buffer_has_selection(buf) then 
+      delete_selection(buf)
+    else
       buf.undo:push(get_state())
       local line = buf.lines[buf.cy] or ""
       local line_visual_len = utf8_char_count(line)
@@ -622,9 +659,14 @@ local function handle_keyboard()
         local before = string.sub(line, 1, byte_pos)
         local after = string.sub(line, byte_pos + 1)
         -- Remove first character from after
-        after = string.gsub(after, "^([%z\1-\127\194-\244][\128-\191]*)", "")
+        local new_after = string.gsub(after, "^" .. UTF8_CHAR_PATTERN, "")
+        if new_after then after = new_after end
         buf.lines[buf.cy] = before .. after
-      elseif buf.cy < #buf.lines then local next_line = buf.lines[buf.cy + 1] or ""; buf.lines[buf.cy] = line .. next_line; table.remove(buf.lines, buf.cy + 1) end
+      elseif buf.cy < #buf.lines then 
+        local next_line = buf.lines[buf.cy + 1] or ""
+        buf.lines[buf.cy] = line .. next_line
+        table.remove(buf.lines, buf.cy + 1)
+      end
       buf.modified = true
     end
     return
