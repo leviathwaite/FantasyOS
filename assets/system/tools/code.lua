@@ -630,8 +630,7 @@ local function handle_keyboard()
         local before = string.sub(line, 1, byte_pos)
         local after = string.sub(line, byte_pos + 1)
         -- Remove last UTF-8 codepoint from before
-        local new_before = string.gsub(before, UTF8_CHAR_PATTERN .. "$", "")
-        if new_before then before = new_before end
+        before = string.gsub(before, UTF8_CHAR_PATTERN .. "$", "")
         buf.lines[buf.cy] = before .. after
         buf.cx = math.max(0, buf.cx - 1)
       elseif buf.cy > 1 then
@@ -659,8 +658,7 @@ local function handle_keyboard()
         local before = string.sub(line, 1, byte_pos)
         local after = string.sub(line, byte_pos + 1)
         -- Remove first character from after
-        local new_after = string.gsub(after, "^" .. UTF8_CHAR_PATTERN, "")
-        if new_after then after = new_after end
+        after = string.gsub(after, "^" .. UTF8_CHAR_PATTERN, "")
         buf.lines[buf.cy] = before .. after
       elseif buf.cy < #buf.lines then 
         local next_line = buf.lines[buf.cy + 1] or ""
