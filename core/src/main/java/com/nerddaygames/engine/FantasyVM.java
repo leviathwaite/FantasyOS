@@ -129,10 +129,8 @@ public class FantasyVM {
         gameCamera = new OrthographicCamera();
         gameCamera.setToOrtho(false, profile.gameWidth, profile.gameHeight);
 
-        // Initialize target state - set target, then end to leave in clean state
+        // Start on OS - set initial target and projection
         setTarget("os");
-        endDrawing();
-        if (currentTarget != null) currentTarget.end();
     }
 
     private void loadFonts() {
