@@ -105,6 +105,11 @@ public class FantasyVM {
         this.profile.height = height;
         osCamera.setToOrtho(false, width, height);
         osCamera.update();
+        // Update projection matrices after camera resize
+        if (currentTarget == osBuffer) {
+            batch.setProjectionMatrix(osCamera.combined);
+            shapes.setProjectionMatrix(osCamera.combined);
+        }
     }
 
     public com.badlogic.gdx.graphics.Texture getScreenTexture() {
@@ -124,8 +129,10 @@ public class FantasyVM {
         gameCamera = new OrthographicCamera();
         gameCamera.setToOrtho(false, profile.gameWidth, profile.gameHeight);
 
-        // Start on OS
+        // Initialize target state - set target, then end to leave in clean state
         setTarget("os");
+        endDrawing();
+        if (currentTarget != null) currentTarget.end();
     }
 
     private void loadFonts() {
