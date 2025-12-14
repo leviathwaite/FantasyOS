@@ -205,6 +205,20 @@ local function dirname(path)
   return nil
 end
 
+-- Helper to join path components
+local function joinpath(dir, filename)
+  if not dir or dir == "" or dir == "." then
+    return filename
+  end
+  -- Normalize to forward slashes
+  dir = dir:gsub("\\", "/")
+  -- Remove trailing slash if present
+  if dir:sub(-1) == "/" then
+    dir = dir:sub(1, -2)
+  end
+  return dir .. "/" .. filename
+end
+
 local function make_undostack()
   local UndoStack = {}
   UndoStack.__index = UndoStack
@@ -874,7 +888,7 @@ CodeEditor.run_current_tab = function()
   end
   
   -- Look for main.lua in project directory
-  local main_path = (project_dir == "." and "main.lua") or (project_dir:gsub("\\", "/") .. "/main.lua")
+  local main_path = joinpath(project_dir, "main.lua")
   
   -- Check if main.lua exists
   if not call_read(main_path) then
