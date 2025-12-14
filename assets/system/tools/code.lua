@@ -97,12 +97,12 @@ end
 -- ============================================================================
 -- DEFAULT PROJECT BOILERPLATE
 -- ============================================================================
-local DEFAULT_MAIN_LUA = [[-- New FantasyOS Project
+local DEFAULT_MAIN_LUA = [[-- New Project
 -- This is your main.lua file
 
 function _init()
   -- Initialize your project here
-  message = "Hello, FantasyOS!"
+  message = "Hello, World!"
 end
 
 function _update()
@@ -118,27 +118,37 @@ end
 
 -- Helper to sanitize path for shell commands
 local function sanitize_path_for_shell(path)
-  if not path then return "" end
-  -- Escape shell special characters
-  local escaped = path:gsub("([^%w%-%._/])", "\\%1")
-  return escaped
+  if not path then return "''" end
+  -- Use single quotes for shell safety and escape any single quotes in the path
+  local escaped = path:gsub("'", "'\\''")
+  return "'" .. escaped .. "'"
+end
+
+-- Helper to extract directory path from file path
+local function get_directory_path(path)
+  if not path then return nil end
+  -- Match everything up to and including the last slash
+  local dir = path:match("^(.+)/[^/]*$")
+  return dir
 end
 
 -- Helper to create directories recursively
 local function create_directories(path)
   if not path or path == "" then return false end
   
-  -- Extract directory path
-  local dir = path:match("(.*/)")
+  -- Extract directory path from file path
+  local dir = get_directory_path(path)
   if not dir then return false end
   
   -- Try using os.execute with mkdir -p (with proper sanitization)
   if os and os.execute then
-    local ok = pcall(function()
+    local ok, result = pcall(function()
       local safe_dir = sanitize_path_for_shell(dir)
-      os.execute("mkdir -p " .. safe_dir)
+      local exit_code = os.execute("mkdir -p " .. safe_dir)
+      -- Check if command succeeded (exit_code == 0 or exit_code == true)
+      return exit_code == 0 or exit_code == true
     end)
-    if ok then return true end
+    if ok and result then return true end
   end
   
   return false
@@ -213,9 +223,9 @@ end
 local function call_run(path)
   -- Ensure main.lua exists before running
   -- Extract project directory from path
-  local project_dir = path:match("(.*/)")
+  local project_dir = get_directory_path(path)
   if project_dir then
-    local main_path = project_dir .. "main.lua"
+    local main_path = project_dir .. "/main.lua"
     -- Check if main.lua exists
     local content = call_read(main_path)
     if not content or content == "" then
