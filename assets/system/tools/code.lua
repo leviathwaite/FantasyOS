@@ -116,44 +116,32 @@ function _draw()
 end
 ]]
 
+-- Helper to sanitize path for shell commands
+local function sanitize_path_for_shell(path)
+  if not path then return "" end
+  -- Escape shell special characters
+  local escaped = path:gsub("([^%w%-%._/])", "\\%1")
+  return escaped
+end
+
 -- Helper to create directories recursively
 local function create_directories(path)
   if not path or path == "" then return false end
   
-  -- Try using os.execute with mkdir -p
+  -- Extract directory path
+  local dir = path:match("(.*/)")
+  if not dir then return false end
+  
+  -- Try using os.execute with mkdir -p (with proper sanitization)
   if os and os.execute then
     local ok = pcall(function()
-      local dir = path:match("(.*/)")
-      if dir then
-        os.execute("mkdir -p " .. dir:gsub(" ", "\\ "))
-      end
+      local safe_dir = sanitize_path_for_shell(dir)
+      os.execute("mkdir -p " .. safe_dir)
     end)
     if ok then return true end
   end
   
-  -- Fallback: try creating parent directories manually
-  local parts = {}
-  local dir = path:match("(.*/)")
-  if dir then
-    for part in dir:gmatch("[^/]+") do
-      table.insert(parts, part)
-    end
-    local current = ""
-    for i, part in ipairs(parts) do
-      current = current .. part .. "/"
-      pcall(function()
-        if io and io.open then
-          -- Try to create by attempting to open a temp file in the directory
-          local test = io.open(current .. ".dir_test", "w")
-          if test then
-            test:close()
-            os.remove(current .. ".dir_test")
-          end
-        end
-      end)
-    end
-  end
-  return true
+  return false
 end
 
 local function call_save(path, content)
@@ -175,20 +163,10 @@ local function call_save(path, content)
   end
   -- Fallback to io.open
   if io and io.open then
-    local ok, err = pcall(function()
-      -- Create parent directories
-      local dir = path:match("(.*/)")
-      if dir then
-        local parts = {}
-        for part in dir:gmatch("[^/]+") do
-          table.insert(parts, part)
-        end
-        local current = ""
-        for i, part in ipairs(parts) do
-          current = current .. part .. "/"
-          pcall(function() os.execute("mkdir -p " .. current:gsub(" ", "\\ ")) end)
-        end
-      end
+    local ok, result = pcall(function()
+      -- Create parent directories using helper
+      create_directories(path)
+      
       -- Write file
       local f = io.open(path, "w")
       if f then
@@ -198,7 +176,7 @@ local function call_save(path, content)
       end
       return false
     end)
-    if ok and err then return true end
+    if ok and result then return true end
   end
   return false
 end
@@ -983,15 +961,13 @@ function CodeEditor.create_project(project_dir)
     return false
   end
   
-  -- Ensure directory exists
-  create_directories(project_dir .. "/")
+  -- Normalize path (remove trailing slash if present)
+  local normalized_dir = project_dir:gsub("/$", "")
   
   -- Prepare main.lua path
-  local main_path = project_dir .. "/main.lua"
-  if project_dir:sub(-1) == "/" then
-    main_path = project_dir .. "main.lua"
-  end
+  local main_path = normalized_dir .. "/main.lua"
   
+  -- Ensure directory exists (create_directories will be called by call_save)
   -- Write default main.lua
   local success = call_save(main_path, DEFAULT_MAIN_LUA)
   
