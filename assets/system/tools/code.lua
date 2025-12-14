@@ -195,6 +195,16 @@ local function split_lines_from_text(txt)
   return lines
 end
 
+-- Helper to extract directory from a file path
+local function dirname(path)
+  if not path or path == "" then return nil end
+  local dir = path:match("(.*/)")
+  if dir then return dir:sub(1, -2) end -- remove trailing slash
+  dir = path:match("(.*\\)")
+  if dir then return dir:sub(1, -2) end -- remove trailing backslash
+  return nil
+end
+
 local function make_undostack()
   local UndoStack = {}
   UndoStack.__index = UndoStack
@@ -852,15 +862,6 @@ CodeEditor.get_tabs = function() return tabs end
 CodeEditor.save_current_tab = function()
   ensure_current_tab(); local b = cur(); if b and call_save(b.path or current_file, table.concat(b.lines, "\n")) then b.modified = false; call_toast("Saved", 1.2) end
 end
--- Helper to extract directory from a file path
-local function dirname(path)
-  if not path or path == "" then return nil end
-  local dir = path:match("(.*/)")
-  if dir then return dir:sub(1, -2) end -- remove trailing slash
-  dir = path:match("(.*\\)")
-  if dir then return dir:sub(1, -2) end -- remove trailing backslash
-  return nil
-end
 
 CodeEditor.run_current_tab = function()
   ensure_current_tab()
@@ -897,5 +898,8 @@ CodeEditor.open_project_file = function(path, content)
   open_tab(path, content)
   call_toast("Opened: " .. tostring(path), 1.0)
 end
+
+-- Make functions globally accessible for Java host
+_G.open_project_file = CodeEditor.open_project_file
 
 return CodeEditor
