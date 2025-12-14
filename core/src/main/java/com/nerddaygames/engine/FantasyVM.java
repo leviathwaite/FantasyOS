@@ -2,7 +2,6 @@ package com.nerddaygames.engine;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
-import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
@@ -19,7 +18,6 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.utils.viewport.Viewport;
 import com.nerddaygames.engine.graphics.Palette;
 import org.luaj.vm2.LuaError;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -92,7 +90,7 @@ public class FantasyVM {
         this.ram = new Ram(); // Ram uses fixed 64KB size
 
         // Default Palette Mapping
-        for (int i = 0; i < 32; i++) ram.poke(MEM_PALETTE_MAP + i, i);
+        for(int i=0; i<32; i++) ram.poke(MEM_PALETTE_MAP + i, i);
 
         // 4. Load Assets
         loadFonts();
@@ -107,10 +105,14 @@ public class FantasyVM {
         this.profile.height = height;
         osCamera.setToOrtho(false, width, height);
         osCamera.update();
-        // gameCamera stays at retro resolution
+        // Update projection matrices after camera resize
+        if (currentTarget == osBuffer) {
+            batch.setProjectionMatrix(osCamera.combined);
+            shapes.setProjectionMatrix(osCamera.combined);
+        }
     }
 
-    public Texture getScreenTexture() {
+    public com.badlogic.gdx.graphics.Texture getScreenTexture() {
         return osBuffer.getColorBufferTexture();
     }
 
@@ -127,7 +129,7 @@ public class FantasyVM {
         gameCamera = new OrthographicCamera();
         gameCamera.setToOrtho(false, profile.gameWidth, profile.gameHeight);
 
-        // Start on OS
+        // Start on OS - set initial target and projection
         setTarget("os");
     }
 
@@ -166,7 +168,8 @@ public class FantasyVM {
 
     // TARGET SWITCHING
     public void setTarget(String target) {
-        endDrawing(); // Flush current batch/shapes
+        endDrawing(); // Flush current batch
+
         // Unbind previous
         if (currentTarget != null) currentTarget.end();
 
@@ -188,7 +191,7 @@ public class FantasyVM {
     }
 
     public void render() {
-        // Start frame on OS Buffer (critical for editor rendering)
+        // Start frame on OS Buffer
         setTarget("os");
 
         // Clear OS Background (Deep Grey)
@@ -279,7 +282,7 @@ public class FantasyVM {
             return;
         }
         input.update();
-        for (int i = 0; i < 8; i++) ram.poke(MEM_INPUT + i, input.btn(i) ? 1 : 0);
+        for(int i=0; i<8; i++) ram.poke(MEM_INPUT + i, input.btn(i) ? 1 : 0);
         ram.poke2(MEM_INPUT + 16, input.mouseX);
         ram.poke2(MEM_INPUT + 18, input.mouseY);
         ram.poke(MEM_INPUT + 20, input.mouseDownLeft ? 1 : 0);
@@ -321,15 +324,6 @@ public class FantasyVM {
 
     public void setViewport(Viewport v) { input.setViewport(v); }
 
-    public void setProjectDir(FileHandle p) {
-        if (p == null) return;
-        try {
-            this.fs = new FileSystem(p);
-        } catch (Exception e) {
-            Gdx.app.error("FantasyVM", "setProjectDir failed: " + e.getMessage(), e);
-        }
-    }
-
     private void loadSprites() {
         spriteSheets = new ArrayList<>();
         loadSheet("sprites.png");
@@ -349,8 +343,9 @@ public class FantasyVM {
             TextureRegion[][] tmp = TextureRegion.split(spriteSheetTexture, 8, 8);
 
             // Flip all regions vertically to fix upside-down rendering
-            for (TextureRegion[] row : tmp) {
-                for (TextureRegion region : row) {
+            // PNG has Y=0 at top, OpenGL has Y=0 at bottom
+            for(TextureRegion[] row : tmp) {
+                for(TextureRegion region : row) {
                     region.flip(false, true);
                 }
             }
@@ -358,17 +353,16 @@ public class FantasyVM {
             // Flatten to 1D array
             TextureRegion[] s = new TextureRegion[tmp.length * tmp[0].length];
             int i = 0;
-            for (TextureRegion[] r : tmp) {
-                for (TextureRegion c : r) {
+            for(TextureRegion[] r : tmp) {
+                for(TextureRegion c : r) {
                     s[i++] = c;
                 }
             }
             spriteSheets.add(s);
-        } catch (Exception e) {
+        } catch(Exception e) {
             System.err.println("Failed to load sprite sheet: " + e.getMessage());
         }
     }
-
     public TextureRegion[] getActiveSprites() {
         if (activeSheetIndex >= spriteSheets.size()) return null;
         return spriteSheets.get(activeSheetIndex);
@@ -378,31 +372,44 @@ public class FantasyVM {
 
     public int sget(int x, int y) {
         if (spriteSheetPixmap == null) return 0;
+        // Bounds check: sprite sheet is 128x128
         if (x < 0 || x >= 128 || y < 0 || y >= 128) return 0;
+
+        // Get RGBA from pixmap (Y=0 at top in PNG)
         int rgba = spriteSheetPixmap.getPixel(x, y);
+
+        // Convert RGBA to palette index
         return palette.rgbaToIndex(rgba);
     }
 
     public void sset(int x, int y, int colorIndex) {
         if (spriteSheetPixmap == null) return;
+        // Bounds check: sprite sheet is 128x128
         if (x < 0 || x >= 128 || y < 0 || y >= 128) {
             System.err.println("sset out of bounds: (" + x + "," + y + ")");
             return;
         }
         if (colorIndex < 0 || colorIndex >= 32) return;
+
+        // Get color from palette
         Color c = palette.get(colorIndex);
+
+        // Set pixel in pixmap (Y=0 at top)
         spriteSheetPixmap.setColor(c);
         spriteSheetPixmap.drawPixel(x, y);
     }
 
     public void refreshSpriteTexture() {
         if (spriteSheetTexture == null || spriteSheetPixmap == null) return;
+
+        // Update texture from pixmap
         spriteSheetTexture.draw(spriteSheetPixmap, 0, 0);
     }
 
     public boolean saveSpriteSheet(String path) {
         if (spriteSheetPixmap == null) return false;
         try {
+            // Write pixmap to PNG file
             com.badlogic.gdx.graphics.PixmapIO.writePNG(Gdx.files.local("disk/" + path), spriteSheetPixmap);
             return true;
         } catch (Exception e) {
@@ -416,26 +423,25 @@ public class FantasyVM {
     }
 
     public void dispose() {
-        if (osBuffer != null) osBuffer.dispose();
-        if (gameBuffer != null) gameBuffer.dispose();
-        if (batch != null) batch.dispose();
-        if (shapes != null) shapes.dispose();
-        if (osFont != null) osFont.dispose();
-        if (gameFont != null) gameFont.dispose();
-        if (palette != null) palette.dispose();
-        if (spriteSheetPixmap != null) spriteSheetPixmap.dispose();
-        if (spriteSheetTexture != null) spriteSheetTexture.dispose();
+        if(osBuffer!=null)osBuffer.dispose();
+        if(gameBuffer!=null)gameBuffer.dispose();
+        if(batch!=null)batch.dispose();
+        if(shapes!=null)shapes.dispose();
+        if(osFont!=null)osFont.dispose();
+        if(gameFont!=null)gameFont.dispose();
+        if(palette!=null)palette.dispose();
+        if(spriteSheetPixmap!=null)spriteSheetPixmap.dispose();
+        if(spriteSheetTexture!=null)spriteSheetTexture.dispose();
     }
 
     public void circle(int x, int y, int r, int c, boolean f) {
-        beginShapes(f ? ShapeRenderer.ShapeType.Filled : ShapeRenderer.ShapeType.Line);
-        shapes.setColor(palette.get(ram.peek(MEM_PALETTE_MAP + (c % 32))));
+        beginShapes(f?ShapeRenderer.ShapeType.Filled:ShapeRenderer.ShapeType.Line);
+        shapes.setColor(palette.get(ram.peek(MEM_PALETTE_MAP+(c%32))));
         shapes.circle(x, y, r);
     }
-
-    public void line(int x, int y, int x2, int y2, int c) {
+    public void line(int x1, int y1, int x2, int y2, int c) {
         beginShapes(ShapeRenderer.ShapeType.Line);
-        shapes.setColor(palette.get(ram.peek(MEM_PALETTE_MAP + (c % 32))));
-        shapes.line(x, y, x2, y2);
+        shapes.setColor(palette.get(ram.peek(MEM_PALETTE_MAP+(c%32))));
+        shapes.line(x1, y1, x2, y2);
     }
 }
