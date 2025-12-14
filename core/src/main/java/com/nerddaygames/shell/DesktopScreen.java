@@ -137,9 +137,34 @@ public class DesktopScreen extends ScreenAdapter {
         String base = "Project";
         int i = 1;
         while(diskRoot.child(base+"_"+String.format("%04d",i)).exists()) i++;
-        FileHandle p = diskRoot.child(base+"_"+String.format("%04d",i));
-        p.mkdirs();
-        p.child("main.lua").writeString("function _init()\n log('New')\nend\nfunction _draw()\n cls(1)\n print('Hi',50,50,7)\nend", false);
+        FileHandle projectDir = diskRoot.child(base+"_"+String.format("%04d",i));
+        projectDir.mkdirs();
+        
+        // Create beginner-friendly boilerplate
+        String boilerplate = 
+            "-- Welcome to FantasyOS!\n" +
+            "-- This is your main.lua file\n\n" +
+            "function _init()\n" +
+            "  -- Initialize your game here\n" +
+            "  x = 64\n" +
+            "  y = 64\n" +
+            "end\n\n" +
+            "function _update()\n" +
+            "  -- Update game logic (called every frame)\n" +
+            "  if btn(0) then x = x - 2 end  -- Left\n" +
+            "  if btn(1) then x = x + 2 end  -- Right\n" +
+            "  if btn(2) then y = y - 2 end  -- Up\n" +
+            "  if btn(3) then y = y + 2 end  -- Down\n" +
+            "end\n\n" +
+            "function _draw()\n" +
+            "  -- Draw to screen (called every frame)\n" +
+            "  cls(1)                    -- Clear with dark blue\n" +
+            "  circfill(x, y, 8, 7)      -- Draw white circle\n" +
+            "  print('Hello World!', 10, 10, 7)\n" +
+            "  print('Use arrow keys to move', 10, 20, 6)\n" +
+            "end\n";
+        
+        projectDir.child("main.lua").writeString(boilerplate, false);
         refreshDesktop();
     }
 

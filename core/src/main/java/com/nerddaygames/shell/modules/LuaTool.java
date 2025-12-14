@@ -289,4 +289,23 @@ public class LuaTool implements ToolModule {
     @Override public void onFocus() { }
     @Override public void onBlur() { }
     @Override public InputProcessor getInputProcessor() { return (toolVM != null) ? toolVM.input : null; }
+    
+    /**
+     * Call a Lua function exposed by the tool with string arguments
+     */
+    public void callLuaFunction(String functionName, String... args) {
+        if (toolVM == null || toolVM.scriptEngine == null) return;
+        try {
+            LuaValue func = toolVM.scriptEngine.globals.get(functionName);
+            if (func.isfunction()) {
+                LuaValue[] luaArgs = new LuaValue[args.length];
+                for (int i = 0; i < args.length; i++) {
+                    luaArgs[i] = LuaValue.valueOf(args[i]);
+                }
+                func.invoke(luaArgs);
+            }
+        } catch (Exception e) {
+            Gdx.app.error("LuaTool", "Failed to call Lua function: " + functionName, e);
+        }
+    }
 }

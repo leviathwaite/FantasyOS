@@ -852,8 +852,50 @@ CodeEditor.get_tabs = function() return tabs end
 CodeEditor.save_current_tab = function()
   ensure_current_tab(); local b = cur(); if b and call_save(b.path or current_file, table.concat(b.lines, "\n")) then b.modified = false; call_toast("Saved", 1.2) end
 end
+-- Helper to extract directory from a file path
+local function dirname(path)
+  if not path or path == "" then return nil end
+  local dir = path:match("(.*/)")
+  if dir then return dir:sub(1, -2) end -- remove trailing slash
+  dir = path:match("(.*\\)")
+  if dir then return dir:sub(1, -2) end -- remove trailing backslash
+  return nil
+end
+
 CodeEditor.run_current_tab = function()
-  ensure_current_tab(); local b = cur(); if b then call_run(b.path or current_file); call_toast("Running",1.2) end
+  ensure_current_tab()
+  local b = cur()
+  local project_dir = "."
+  
+  -- Determine project directory from current file
+  if b and b.path and b.path ~= "" then
+    project_dir = dirname(b.path) or "."
+  end
+  
+  -- Look for main.lua in project directory
+  local main_path = (project_dir == "." and "main.lua") or (project_dir:gsub("\\", "/") .. "/main.lua")
+  
+  -- Check if main.lua exists
+  if not call_read(main_path) then
+    call_toast("No main.lua found in project", 2.0)
+    return false
+  end
+  
+  -- Signal host to run the project's main.lua
+  local ran = call_run(main_path)
+  if ran then
+    call_toast("Running: " .. tostring(main_path), 1.5)
+    return true
+  else
+    call_toast("Run failed", 2.0)
+    return false
+  end
+end
+
+-- Called by Java host to open a project file
+CodeEditor.open_project_file = function(path, content)
+  open_tab(path, content)
+  call_toast("Opened: " .. tostring(path), 1.0)
 end
 
 return CodeEditor

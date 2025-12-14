@@ -53,6 +53,7 @@ public class EditorScreen extends ScreenAdapter {
         createModule("Config", new Color(0.3f, 0.3f, 0.3f, 1), "system/tools/config.lua");
 
         switchModule("Code");
+        loadProjectFiles();
     }
 
     private void createModule(String name, Color color, String scriptPath) {
@@ -82,6 +83,24 @@ public class EditorScreen extends ScreenAdapter {
             plexer.addProcessor(editorInput);
             if (currentModule.getInputProcessor() != null) plexer.addProcessor(currentModule.getInputProcessor());
             Gdx.input.setInputProcessor(plexer);
+        }
+    }
+    
+    private void loadProjectFiles() {
+        FileHandle mainLua = project.getDir().child("main.lua");
+        if (mainLua.exists()) {
+            // Signal the Code module to open main.lua
+            if (modules.get("Code") instanceof LuaTool) {
+                LuaTool codeTool = (LuaTool) modules.get("Code");
+                try {
+                    String content = mainLua.readString();
+                    String path = mainLua.path();
+                    // Call the open_project_file function in code.lua
+                    codeTool.callLuaFunction("open_project_file", path, content);
+                } catch (Exception e) {
+                    Gdx.app.error("EditorScreen", "Failed to load main.lua: " + e.getMessage());
+                }
+            }
         }
     }
 
