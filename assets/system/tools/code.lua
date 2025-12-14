@@ -94,6 +94,68 @@ local function get_mouse()
   return nil
 end
 
+-- ============================================================================
+-- DEFAULT PROJECT BOILERPLATE
+-- ============================================================================
+local DEFAULT_MAIN_LUA = [[-- New FantasyOS Project
+-- This is your main.lua file
+
+function _init()
+  -- Initialize your project here
+  message = "Hello, FantasyOS!"
+end
+
+function _update()
+  -- Update game logic here (runs every frame)
+end
+
+function _draw()
+  -- Render your game here (runs every frame)
+  cls(0)  -- clear screen with color 0
+  print(message, 10, 10, 7)  -- print message at (10,10) in color 7
+end
+]]
+
+-- Helper to create directories recursively
+local function create_directories(path)
+  if not path or path == "" then return false end
+  
+  -- Try using os.execute with mkdir -p
+  if os and os.execute then
+    local ok = pcall(function()
+      local dir = path:match("(.*/)")
+      if dir then
+        os.execute("mkdir -p " .. dir:gsub(" ", "\\ "))
+      end
+    end)
+    if ok then return true end
+  end
+  
+  -- Fallback: try creating parent directories manually
+  local parts = {}
+  local dir = path:match("(.*/)")
+  if dir then
+    for part in dir:gmatch("[^/]+") do
+      table.insert(parts, part)
+    end
+    local current = ""
+    for i, part in ipairs(parts) do
+      current = current .. part .. "/"
+      pcall(function()
+        if io and io.open then
+          -- Try to create by attempting to open a temp file in the directory
+          local test = io.open(current .. ".dir_test", "w")
+          if test then
+            test:close()
+            os.remove(current .. ".dir_test")
+          end
+        end
+      end)
+    end
+  end
+  return true
+end
+
 local function call_save(path, content)
   if type(project) == "table" and type(project.write) == "function" then
     local ok, res = pcall(function() return project.write(path, content) end)
@@ -102,6 +164,41 @@ local function call_save(path, content)
   if is_func(save_file) then
     local ok, res = pcall(function() return save_file(path, content) end)
     if ok then return res end
+  end
+  if is_func(write_file) then
+    local ok, res = pcall(function() return write_file(path, content) end)
+    if ok then return res end
+  end
+  if is_func(host_write) then
+    local ok, res = pcall(function() return host_write(path, content) end)
+    if ok then return res end
+  end
+  -- Fallback to io.open
+  if io and io.open then
+    local ok, err = pcall(function()
+      -- Create parent directories
+      local dir = path:match("(.*/)")
+      if dir then
+        local parts = {}
+        for part in dir:gmatch("[^/]+") do
+          table.insert(parts, part)
+        end
+        local current = ""
+        for i, part in ipairs(parts) do
+          current = current .. part .. "/"
+          pcall(function() os.execute("mkdir -p " .. current:gsub(" ", "\\ ")) end)
+        end
+      end
+      -- Write file
+      local f = io.open(path, "w")
+      if f then
+        f:write(content)
+        f:close()
+        return true
+      end
+      return false
+    end)
+    if ok and err then return true end
   end
   return false
 end
@@ -115,10 +212,43 @@ local function call_read(path)
     local ok, res = pcall(function() return load_file(path) end)
     if ok then return res end
   end
+  if is_func(host_read) then
+    local ok, res = pcall(function() return host_read(path) end)
+    if ok then return res end
+  end
+  -- Fallback to io.open
+  if io and io.open then
+    local ok, content = pcall(function()
+      local f = io.open(path, "r")
+      if f then
+        local data = f:read("*all")
+        f:close()
+        return data
+      end
+      return nil
+    end)
+    if ok and content then return content end
+  end
   return nil
 end
 
 local function call_run(path)
+  -- Ensure main.lua exists before running
+  -- Extract project directory from path
+  local project_dir = path:match("(.*/)")
+  if project_dir then
+    local main_path = project_dir .. "main.lua"
+    -- Check if main.lua exists
+    local content = call_read(main_path)
+    if not content or content == "" then
+      -- Create default main.lua
+      local success = call_save(main_path, DEFAULT_MAIN_LUA)
+      if success then
+        call_toast("Created missing main.lua", 1.5)
+      end
+    end
+  end
+  
   if is_func(run_project) then
     local ok, res = pcall(function() return run_project(path) end)
     if ok then return res end
@@ -839,6 +969,40 @@ function _draw(win_x, win_y, win_w, win_h)
     local stats = string.format("Tab %d/%d  Line %d  Col %d  %d lines", current_tab, #tabs, buf.cy, buf.cx + 1, #buf.lines)
     print(stats, win_x + 4, win_y + 20, safe_col(config.colors.comment))
     print("Ctrl+C/V/X Copy/Paste/Cut  Ctrl+Z/Y Undo/Redo  Ctrl+F Find  Ctrl+S Save  Ctrl+R Run  Ctrl+Tab Switch Tab  Ctrl+/- Font", win_x + 4, win_y + 36, safe_col(config.colors.comment))
+  end
+end
+
+-- ============================================================================
+-- PROJECT HELPERS
+-- ============================================================================
+
+-- Create a new project with default main.lua
+function CodeEditor.create_project(project_dir)
+  if not project_dir or project_dir == "" then
+    call_toast("Error: Invalid project directory", 2.0)
+    return false
+  end
+  
+  -- Ensure directory exists
+  create_directories(project_dir .. "/")
+  
+  -- Prepare main.lua path
+  local main_path = project_dir .. "/main.lua"
+  if project_dir:sub(-1) == "/" then
+    main_path = project_dir .. "main.lua"
+  end
+  
+  -- Write default main.lua
+  local success = call_save(main_path, DEFAULT_MAIN_LUA)
+  
+  if success then
+    -- Open the new main.lua in a tab
+    open_tab(main_path, DEFAULT_MAIN_LUA)
+    call_toast("Project created: " .. project_dir, 2.0)
+    return true
+  else
+    call_toast("Error: Failed to create project", 2.0)
+    return false
   end
 end
 
