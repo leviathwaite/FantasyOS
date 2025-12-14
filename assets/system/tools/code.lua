@@ -132,12 +132,12 @@ local function get_directory_path(path)
   return dir
 end
 
--- Helper to create directories recursively
-local function create_directories(path)
-  if not path or path == "" then return false end
+-- Helper to create parent directories for a file path recursively
+local function ensure_parent_directories(file_path)
+  if not file_path or file_path == "" then return false end
   
   -- Extract directory path from file path
-  local dir = get_directory_path(path)
+  local dir = get_directory_path(file_path)
   if not dir then return false end
   
   -- Try using os.execute with mkdir -p (with proper sanitization)
@@ -175,7 +175,7 @@ local function call_save(path, content)
   if io and io.open then
     local ok, result = pcall(function()
       -- Create parent directories using helper
-      create_directories(path)
+      ensure_parent_directories(path)
       
       -- Write file
       local f = io.open(path, "w")
@@ -226,9 +226,9 @@ local function call_run(path)
   local project_dir = get_directory_path(path)
   if project_dir then
     local main_path = project_dir .. "/main.lua"
-    -- Check if main.lua exists
+    -- Check if main.lua exists (only create if file doesn't exist, not if it's empty)
     local content = call_read(main_path)
-    if not content or content == "" then
+    if not content then
       -- Create default main.lua
       local success = call_save(main_path, DEFAULT_MAIN_LUA)
       if success then
@@ -977,7 +977,7 @@ function CodeEditor.create_project(project_dir)
   -- Prepare main.lua path
   local main_path = normalized_dir .. "/main.lua"
   
-  -- Ensure directory exists (create_directories will be called by call_save)
+  -- Ensure directory exists (ensure_parent_directories will be called by call_save)
   -- Write default main.lua
   local success = call_save(main_path, DEFAULT_MAIN_LUA)
   
