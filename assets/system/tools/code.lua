@@ -44,6 +44,41 @@ end
 
 -- The rest of the editor code remains unchanged
 -- ============================================================================
+-- UTF-8 HELPERS
+-- ============================================================================
+-- UTF-8 character boundary pattern (matches single UTF-8 codepoint)
+local UTF8_CHAR_PATTERN = "([%z\1-\127\194-\244][\128-\191]*)"
+
+local function utf8_char_count(s)
+  if not s or s == "" then return 0 end
+  local count = 0
+  for _ in string.gmatch(s, UTF8_CHAR_PATTERN) do count = count + 1 end
+  return count
+end
+
+-- Convert visual character index to byte offset in string
+local function visual_to_byte_offset(s, visual_idx)
+  if not s or s == "" or visual_idx <= 0 then return 0 end
+  local count = 0
+  local byte_pos = 0
+  for char in string.gmatch(s, UTF8_CHAR_PATTERN) do
+    if count >= visual_idx then break end
+    byte_pos = byte_pos + #char
+    count = count + 1
+  end
+  return byte_pos
+end
+
+local function compute_font_metrics_from_size(px)
+  px = px or config.font_size or 16
+  local fh = math.max(8, math.floor(px * 0.95))
+  local fw = math.max(4, math.floor(px * 0.58 + 0.5))
+  local lh = math.floor(fh * 1.35) + 2
+  lh = math.max(lh, config.line_h or 0)
+  return { font_w = fw, font_h = fh, line_h = lh }
+end
+
+-- ============================================================================
 -- SAFE BINDINGS WRAPPERS
 -- ============================================================================
 local function is_func(v) return type(v) == "function" end
@@ -175,6 +210,13 @@ KEY_A=29; KEY_C=31; KEY_F=34; KEY_R=46; KEY_S=47
 KEY_V=50; KEY_X=52; KEY_Y=53; KEY_Z=54
 KEY_MINUS = 69
 KEY_EQUALS = 70
+
+-- ============================================================================
+-- BACKSPACE REPEAT STATE
+-- ============================================================================
+local _back_repeat = 0
+local BACK_INITIAL_DELAY = 15    -- frames before repeating starts
+local BACK_REPEAT_INTERVAL = 4   -- frames between repeated deletes
 
 -- ============================================================================
 -- BUFFER & TAB MANAGEMENT
@@ -503,14 +545,15 @@ local function handle_keyboard()
         buf.undo:push(get_state())
         if buffer_has_selection(buf) then delete_selection(buf) end
         local line = buf.lines[buf.cy] or ""
-        local before = string.sub(line,1,buf.cx)
-        local after = string.sub(line, buf.cx+1)
+        local byte_pos = visual_to_byte_offset(line, buf.cx)
+        local before = string.sub(line, 1, byte_pos)
+        local after = string.sub(line, byte_pos + 1)
         local lines = {}
         for s in string.gmatch(buf.clipboard, "([^\n]*)\n?") do table.insert(lines, s) end
         if #lines == 0 then return end
         buf.lines[buf.cy] = before .. lines[1]
         for i = 2, #lines do table.insert(buf.lines, buf.cy + i -1, lines[i]) end
-        if #lines > 1 then buf.cy = buf.cy + #lines -1; buf.cx = #lines[#lines] else buf.cx = buf.cx + #lines[1] end
+        if #lines > 1 then buf.cy = buf.cy + #lines -1; buf.cx = utf8_char_count(lines[#lines]) else buf.cx = buf.cx + utf8_char_count(lines[1]) end
         buf.modified = true
       end
       return
@@ -525,39 +568,103 @@ local function handle_keyboard()
 
   if btnp_safe(KEY_LEFT) then
     if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end
-    if buf.cx > 0 then buf.cx = buf.cx - 1 elseif buf.cy > 1 then buf.cy = buf.cy -1; buf.cx = #(buf.lines[buf.cy] or "") end
+    if buf.cx > 0 then buf.cx = buf.cx - 1 elseif buf.cy > 1 then buf.cy = buf.cy -1; buf.cx = utf8_char_count(buf.lines[buf.cy] or "") end
     if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end
     return
   end
   if btnp_safe(KEY_RIGHT) then
     if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end
-    if buf.cx < #(buf.lines[buf.cy] or "") then buf.cx = buf.cx + 1 elseif buf.cy < #buf.lines then buf.cy = buf.cy +1; buf.cx = 0 end
+    if buf.cx < utf8_char_count(buf.lines[buf.cy] or "") then buf.cx = buf.cx + 1 elseif buf.cy < #buf.lines then buf.cy = buf.cy +1; buf.cx = 0 end
     if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end
     return
   end
-  if btnp_safe(KEY_UP) then if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end; if buf.cy > 1 then buf.cy = buf.cy - 1; buf.cx = math.min(buf.cx, #(buf.lines[buf.cy] or "")) end; if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end; return end
-  if btnp_safe(KEY_DOWN) then if shift and not buffer_has_selection(buf) then buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy end; if buf.cy < #buf.lines then buf.cy = buf.cy + 1; buf.cx = math.min(buf.cx, #(buf.lines[buf.cy] or "")) end; if shift then buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy else buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil end; return end
+  if btnp_safe(KEY_UP) then 
+    if shift and not buffer_has_selection(buf) then 
+      buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy 
+    end
+    if buf.cy > 1 then 
+      buf.cy = buf.cy - 1
+      buf.cx = math.min(buf.cx, utf8_char_count(buf.lines[buf.cy] or ""))
+    end
+    if shift then 
+      buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy 
+    else 
+      buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil 
+    end
+    return 
+  end
+  if btnp_safe(KEY_DOWN) then 
+    if shift and not buffer_has_selection(buf) then 
+      buf.sel_start_x, buf.sel_start_y = buf.cx, buf.cy 
+    end
+    if buf.cy < #buf.lines then 
+      buf.cy = buf.cy + 1
+      buf.cx = math.min(buf.cx, utf8_char_count(buf.lines[buf.cy] or ""))
+    end
+    if shift then 
+      buf.sel_end_x, buf.sel_end_y = buf.cx, buf.cy 
+    else 
+      buf.sel_start_x, buf.sel_start_y, buf.sel_end_x, buf.sel_end_y = nil,nil,nil,nil 
+    end
+    return 
+  end
   if btnp_safe(KEY_HOME) then buf.cx = 0; return end
-  if btnp_safe(KEY_END) then buf.cx = #(buf.lines[buf.cy] or ""); return end
+  if btnp_safe(KEY_END) then buf.cx = utf8_char_count(buf.lines[buf.cy] or ""); return end
   if btnp_safe(KEY_PGUP) then buf.cy = math.max(1, buf.cy - 10); return end
   if btnp_safe(KEY_PGDN) then buf.cy = math.min(#buf.lines, buf.cy + 10); return end
 
-  if btnp_safe(KEY_BACK) then
-    if buffer_has_selection(buf) then delete_selection(buf) else
+  if btn_safe(KEY_BACK) then
+    _back_repeat = _back_repeat + 1
+  else
+    _back_repeat = 0
+  end
+
+  if btnp_safe(KEY_BACK) or (_back_repeat > BACK_INITIAL_DELAY and ((_back_repeat - BACK_INITIAL_DELAY) % BACK_REPEAT_INTERVAL == 0)) then
+    if buffer_has_selection(buf) then 
+      delete_selection(buf)
+    else
       buf.undo:push(get_state())
-      if buf.cx > 0 then local line = buf.lines[buf.cy] or ""; buf.lines[buf.cy] = string.sub(line,1,buf.cx -1) .. string.sub(line, buf.cx + 1); buf.cx = buf.cx - 1
-      elseif buf.cy > 1 then local current = buf.lines[buf.cy] or ""; local prev = buf.lines[buf.cy -1] or ""; buf.cx = #prev; buf.lines[buf.cy -1] = prev .. current; table.remove(buf.lines, buf.cy); buf.cy = buf.cy - 1 end
+      if buf.cx > 0 then
+        local line = buf.lines[buf.cy] or ""
+        local byte_pos = visual_to_byte_offset(line, buf.cx)
+        local before = string.sub(line, 1, byte_pos)
+        local after = string.sub(line, byte_pos + 1)
+        -- Remove last UTF-8 codepoint from before
+        before = string.gsub(before, UTF8_CHAR_PATTERN .. "$", "")
+        buf.lines[buf.cy] = before .. after
+        buf.cx = math.max(0, buf.cx - 1)
+      elseif buf.cy > 1 then
+        local current = buf.lines[buf.cy] or ""
+        local prev = buf.lines[buf.cy -1] or ""
+        buf.cx = utf8_char_count(prev)
+        buf.lines[buf.cy -1] = prev .. current
+        table.remove(buf.lines, buf.cy)
+        buf.cy = buf.cy - 1
+      end
       buf.modified = true
     end
     return
   end
 
   if btnp_safe(KEY_DEL) then
-    if buffer_has_selection(buf) then delete_selection(buf) else
+    if buffer_has_selection(buf) then 
+      delete_selection(buf)
+    else
       buf.undo:push(get_state())
       local line = buf.lines[buf.cy] or ""
-      if buf.cx < #line then buf.lines[buf.cy] = string.sub(line,1,buf.cx) .. string.sub(line, buf.cx + 2)
-      elseif buf.cy < #buf.lines then local next_line = buf.lines[buf.cy + 1] or ""; buf.lines[buf.cy] = line .. next_line; table.remove(buf.lines, buf.cy + 1) end
+      local line_visual_len = utf8_char_count(line)
+      if buf.cx < line_visual_len then 
+        local byte_pos = visual_to_byte_offset(line, buf.cx)
+        local before = string.sub(line, 1, byte_pos)
+        local after = string.sub(line, byte_pos + 1)
+        -- Remove first character from after
+        after = string.gsub(after, "^" .. UTF8_CHAR_PATTERN, "")
+        buf.lines[buf.cy] = before .. after
+      elseif buf.cy < #buf.lines then 
+        local next_line = buf.lines[buf.cy + 1] or ""
+        buf.lines[buf.cy] = line .. next_line
+        table.remove(buf.lines, buf.cy + 1)
+      end
       buf.modified = true
     end
     return
@@ -567,7 +674,9 @@ local function handle_keyboard()
     buf.undo:push(get_state())
     if buffer_has_selection(buf) then delete_selection(buf) end
     local line = buf.lines[buf.cy] or ""
-    local before = string.sub(line,1,buf.cx); local after = string.sub(line, buf.cx + 1)
+    local byte_pos = visual_to_byte_offset(line, buf.cx)
+    local before = string.sub(line, 1, byte_pos)
+    local after = string.sub(line, byte_pos + 1)
     local spaces = string.match(before, "^(%s*)") or ""; local indent = #spaces
     local trimmed = string.match(before, "^%s*(.-)%s*$")
     if trimmed and (trimmed:match("^function") or trimmed:match("^if") or trimmed:match("^for") or trimmed:match("^while") or trimmed:match("^repeat") or trimmed == "do" or trimmed:match("then%s*$")) then indent = indent + config.tab_width end
@@ -580,7 +689,8 @@ local function handle_keyboard()
     if buffer_has_selection(buf) then delete_selection(buf) end
     local spaces = string.rep(" ", config.tab_width)
     local line = buf.lines[buf.cy] or ""
-    buf.lines[buf.cy] = string.sub(line,1,buf.cx) .. spaces .. string.sub(line, buf.cx + 1)
+    local byte_pos = visual_to_byte_offset(line, buf.cx)
+    buf.lines[buf.cy] = string.sub(line, 1, byte_pos) .. spaces .. string.sub(line, byte_pos + 1)
     buf.cx = buf.cx + config.tab_width
     buf.modified = true
     return
@@ -592,8 +702,9 @@ local function handle_keyboard()
       buf.undo:push(get_state())
       if buffer_has_selection(buf) then delete_selection(buf) end
       local line = buf.lines[buf.cy] or ""
-      buf.lines[buf.cy] = string.sub(line,1,buf.cx) .. ch .. string.sub(line, buf.cx + 1)
-      buf.cx = buf.cx + 1
+      local byte_pos = visual_to_byte_offset(line, buf.cx)
+      buf.lines[buf.cy] = string.sub(line, 1, byte_pos) .. ch .. string.sub(line, byte_pos + 1)
+      buf.cx = buf.cx + utf8_char_count(ch)
       buf.modified = true
     end
     ch = kbchar()
@@ -621,7 +732,8 @@ local function mouse_to_editor_pos(m, win_x, win_y, win_w, win_h)
   local col = math.floor((rel_x - 4) / config.font_w)
   if col < 0 then col = 0 end
   line_idx = math.max(1, math.min(#b.lines, line_idx))
-  col = math.max(0, math.min(#(b.lines[line_idx] or ""), col))
+  local visual_len = utf8_char_count(b.lines[line_idx] or "")
+  col = math.max(0, math.min(visual_len, col))
   return line_idx, col
 end
 
@@ -804,7 +916,7 @@ function _draw(win_x, win_y, win_w, win_h)
 
     if sy and line_idx >= sy and line_idx <= ey and rect then
       local sel_x_start = (line_idx == sy) and sx or 0
-      local sel_x_end = (line_idx == ey) and ex or #(buf.lines[line_idx] or "")
+      local sel_x_end = (line_idx == ey) and ex or utf8_char_count(buf.lines[line_idx] or "")
       if sel_x_end > sel_x_start then
         local sel_pixel_x = win_x + 40 + 4 + (sel_x_start * config.font_w)
         local sel_pixel_w = (sel_x_end - sel_x_start) * config.font_w
@@ -823,8 +935,9 @@ function _draw(win_x, win_y, win_w, win_h)
           if (line_idx == buf.cy and char_pos == buf.cx) or (line_idx == by and char_pos == bx) then col = safe_col(config.colors.bracket) end
         end
         print(token.text, cur_x, line_y, col)
-        cur_x = cur_x + (#token.text * config.font_w)
-        char_pos = char_pos + #token.text
+        local tlen = utf8_char_count(token.text)
+        cur_x = cur_x + (tlen * config.font_w)
+        char_pos = char_pos + tlen
       end
     end
 
