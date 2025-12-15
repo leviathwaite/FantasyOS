@@ -137,10 +137,46 @@ public class DesktopScreen extends ScreenAdapter {
         String base = "Project";
         int i = 1;
         while(diskRoot.child(base+"_"+String.format("%04d",i)).exists()) i++;
-        FileHandle p = diskRoot.child(base+"_"+String.format("%04d",i));
-        p.mkdirs();
-        p.child("main.lua").writeString("function _init()\n log('New')\nend\nfunction _draw()\n cls(1)\n print('Hi',50,50,7)\nend", false);
+        FileHandle projectDir = diskRoot.child(base+"_"+String.format("%04d",i));
+        projectDir.mkdirs();
+        
+        // Use blank template as default
+        FileHandle templateDir = Gdx.files.internal("assets/system/templates/blank");
+        if (templateDir.exists() && templateDir.isDirectory()) {
+            // Copy template files to new project
+            copyTemplateFiles(templateDir, projectDir);
+        } else {
+            // Fallback: create basic main.lua if template not found
+            projectDir.child("main.lua").writeString(
+                "function _init()\n" +
+                "  log('New')\n" +
+                "end\n\n" +
+                "function _draw()\n" +
+                "  cls(1)\n" +
+                "  print('Hi',50,50,7)\n" +
+                "end", false);
+        }
+        
         refreshDesktop();
+    }
+    
+    private void copyTemplateFiles(FileHandle source, FileHandle dest) {
+        if (source.isDirectory()) {
+            if (!dest.exists()) {
+                dest.mkdirs();
+            }
+            FileHandle[] children = source.list();
+            for (FileHandle child : children) {
+                FileHandle destChild = dest.child(child.name());
+                copyTemplateFiles(child, destChild);
+            }
+        } else {
+            try {
+                source.copyTo(dest);
+            } catch (Exception e) {
+                Gdx.app.error("DesktopScreen", "Failed to copy template file: " + e.getMessage());
+            }
+        }
     }
 
     @Override

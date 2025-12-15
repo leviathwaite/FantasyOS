@@ -81,11 +81,12 @@ public class LuaTool implements ToolModule {
         injectProjectAPI();
 
         try {
-            FileHandle fh = Gdx.files.internal(toolScriptPath);
-            if (fh.exists()) {
+            // Check for user override first, then fallback to system tool
+            FileHandle fh = resolveToolScript(toolScriptPath);
+            if (fh != null && fh.exists()) {
                 String script = fh.readString("UTF-8");
                 if (toolVM.scriptEngine != null) {
-                    toolVM.scriptEngine.runScript(script, toolScriptPath);
+                    toolVM.scriptEngine.runScript(script, fh.path());
                     if (toolVM.scriptEngine.globals.get("_init").isfunction()) {
                         toolVM.scriptEngine.globals.get("_init").call();
                     }
@@ -94,6 +95,40 @@ public class LuaTool implements ToolModule {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Resolve tool script with fallback system:
+     * 1. Check disk/user/tools/{filename} (user override)
+     * 2. Fallback to system/tools/{filename} (default)
+     *
+     * @param systemPath the system path like "system/tools/code.lua"
+     * @return the FileHandle to use, or null if not found
+     */
+    private FileHandle resolveToolScript(String systemPath) {
+        // Extract filename from system path
+        String filename = systemPath;
+        int lastSlash = systemPath.lastIndexOf('/');
+        if (lastSlash >= 0) {
+            filename = systemPath.substring(lastSlash + 1);
+        }
+
+        // Try user override first
+        FileHandle userOverride = Gdx.files.local("disk/user/tools/" + filename);
+        if (userOverride.exists()) {
+            Gdx.app.log("LuaTool", "Using user override: " + userOverride.path());
+            return userOverride;
+        }
+
+        // Fallback to system default
+        FileHandle systemDefault = Gdx.files.internal(systemPath);
+        if (systemDefault.exists()) {
+            Gdx.app.log("LuaTool", "Using system default: " + systemPath);
+            return systemDefault;
+        }
+
+        Gdx.app.error("LuaTool", "Tool script not found: " + systemPath);
+        return null;
     }
 
     /**
