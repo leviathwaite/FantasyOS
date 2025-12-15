@@ -122,25 +122,30 @@ public class FileViewer {
         shapes.rect(bounds.x, bounds.y, bounds.width, bounds.height);
         shapes.end();
         
-        // Entries
-        batch.begin();
+        // Calculate visible range
         float y = bounds.y + bounds.height - 25;
         int visibleLines = (int)(bounds.height / lineHeight) - 1;
         int startIndex = scrollOffset;
         int endIndex = Math.min(entries.size(), startIndex + visibleLines);
         
+        // Draw selection highlights first
+        shapes.begin(ShapeRenderer.ShapeType.Filled);
+        for (int i = startIndex; i < endIndex; i++) {
+            if (i == selectedIndex) {
+                float highlightY = bounds.y + bounds.height - 25 - ((i - startIndex) * lineHeight);
+                shapes.setColor(0.2f, 0.3f, 0.5f, 1f);
+                shapes.rect(bounds.x, highlightY - 2, bounds.width, lineHeight);
+            }
+        }
+        shapes.end();
+        
+        // Draw entries text
+        batch.begin();
+        y = bounds.y + bounds.height - 25;
+        
         for (int i = startIndex; i < endIndex; i++) {
             FileEntry entry = entries.get(i);
             float x = bounds.x + 10 + (entry.depth * indent);
-            
-            // Selection highlight
-            if (i == selectedIndex) {
-                shapes.begin(ShapeRenderer.ShapeType.Filled);
-                shapes.setColor(0.2f, 0.3f, 0.5f, 1f);
-                shapes.rect(bounds.x, y - 2, bounds.width, lineHeight);
-                shapes.end();
-                batch.begin();
-            }
             
             // Icon
             String icon = entry.isDirectory ? (entry.expanded ? "▼" : "▶") : "●";
@@ -162,7 +167,12 @@ public class FileViewer {
             
             float scrollbarHeight = bounds.height - 10;
             float thumbHeight = (visibleLines / (float)entries.size()) * scrollbarHeight;
-            float thumbY = bounds.y + 5 + ((scrollOffset / (float)(entries.size() - visibleLines)) * (scrollbarHeight - thumbHeight));
+            float thumbY = bounds.y + 5;
+            
+            // Safe calculation to prevent division by zero
+            if (entries.size() > visibleLines) {
+                thumbY += (scrollOffset / (float)(entries.size() - visibleLines)) * (scrollbarHeight - thumbHeight);
+            }
             
             shapes.rect(bounds.x + bounds.width - 10, thumbY, 5, thumbHeight);
             shapes.end();

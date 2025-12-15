@@ -40,10 +40,24 @@ function ToonConverter.parse(toon_str)
         -- Handle list items
         local list_value = line:match("^%s*%-%s*(.+)$")
         if list_value then
+          -- Ensure current is an array-like table
           if type(current) ~= "table" then
+            -- This shouldn't happen in well-formed TOON, but handle it gracefully
             current = {}
+            stack[#stack] = current
           end
-          table.insert(current, ToonConverter.parseValue(list_value))
+          -- Check if we need to initialize as array (no string keys)
+          local has_keys = false
+          for k, v in pairs(current) do
+            if type(k) == "string" then
+              has_keys = true
+              break
+            end
+          end
+          if not has_keys then
+            -- It's safe to treat as array
+            table.insert(current, ToonConverter.parseValue(list_value))
+          end
         end
       end
       
