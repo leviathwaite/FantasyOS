@@ -145,8 +145,18 @@ local function call_set_editor_font_size(px)
 end
 
 local function call_toast(msg, secs)
-  if is_func(toast) then pcall(function() toast(msg) end) end
-  if is_func(toast_with_time) and secs then pcall(function() toast_with_time(msg, secs) end) end
+  local has_toast = false
+  if is_func(toast) then 
+    pcall(function() toast(msg) end)
+    has_toast = true
+  end
+  if is_func(toast_with_time) and secs then 
+    pcall(function() toast_with_time(msg, secs) end)
+    has_toast = true
+  end
+  if not has_toast then
+    print("TOAST: " .. msg)
+  end
 end
 
 -- ============================================================================
@@ -519,7 +529,7 @@ local function handle_keyboard()
     if btnp_safe(KEY_Z) then local s = buf.undo:undo(); if s then buf.lines = s end; return end
     if btnp_safe(KEY_Y) then local s = buf.undo:redo(); if s then buf.lines = s end; return end
     if btnp_safe(KEY_F) then buf.find_mode = not buf.find_mode; return end
-    if btnp_safe(KEY_S) then local path = buf.path or current_file; local ok = call_save(path, table.concat(buf.lines, "\n")); if ok then buf.path = path; buf.modified = false; call_toast("Saved " .. path, 1.2) end; return end
+    if btnp_safe(KEY_S) then call_toast("Saving...", 0.8); local path = buf.path or current_file; local ok = call_save(path, table.concat(buf.lines, "\n")); if ok then buf.path = path; buf.modified = false; call_toast("Saved " .. path, 1.2) end; return end
     if btnp_safe(KEY_R) then local path = buf.path or current_file; call_run(path); call_toast("Running " .. path, 1.2); return end
   end
 
