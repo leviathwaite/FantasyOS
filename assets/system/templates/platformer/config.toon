@@ -1,0 +1,25 @@
+# Platformer Project Configuration
+
+name: Platformer Game
+description: Basic platformer template with physics
+
+resolution:
+  width: 240
+  height: 136
+
+palette: pico8
+
+memory:
+  size: 65536
+  banks: 8
+
+physics:
+  gravity: 0.5
+  jump_speed: -8
+  move_speed: 2
+
+input:
+  enabled: true
+  
+audio:
+  enabled: true
