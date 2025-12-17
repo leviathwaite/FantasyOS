@@ -1,0 +1,25 @@
+# Shooter Project Configuration
+
+name: Shooter Game
+description: Top-down shooter template
+
+resolution:
+  width: 240
+  height: 136
+
+palette: pico8
+
+memory:
+  size: 65536
+  banks: 8
+
+gameplay:
+  player_speed: 2
+  bullet_speed: 4
+  spawn_rate: 60
+
+input:
+  enabled: true
+  
+audio:
+  enabled: true

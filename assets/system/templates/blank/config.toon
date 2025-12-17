@@ -1,0 +1,20 @@
+# Blank Project Configuration
+
+name: Blank Project
+description: A minimal starting point
+
+resolution:
+  width: 240
+  height: 136
+
+palette: pico8
+
+memory:
+  size: 65536
+  banks: 8
+
+input:
+  enabled: true
+  
+audio:
+  enabled: true
