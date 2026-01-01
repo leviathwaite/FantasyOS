@@ -1,6 +1,7 @@
 package com.nerddaygames.shell;
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.InputMultiplexer;
 import com.badlogic.gdx.ScreenAdapter;
@@ -23,6 +24,7 @@ import java.util.Map;
 
 public class EditorScreen extends ScreenAdapter {
     private final Main game;
+    private final FileHandle projectDir; // Store project directory for minimizing
     private SpriteBatch uiBatch;
     private ShapeRenderer uiShapes;
     private BitmapFont uiFont;
@@ -35,11 +37,15 @@ public class EditorScreen extends ScreenAdapter {
 
     public EditorScreen(Main game, FileHandle projectDir) {
         this.game = game;
+        this.projectDir = projectDir; // Store for later use
         uiBatch = new SpriteBatch();
         uiShapes = new ShapeRenderer();
         uiFont = new BitmapFont(true); // Flipped for Y-Down
         uiViewport = new ScreenViewport();
         ((OrthographicCamera)uiViewport.getCamera()).setToOrtho(true);
+
+        // Catch Android back button to prevent app exit
+        Gdx.input.setCatchKey(Input.Keys.BACK, true);
 
         createModule("Code", new Color(0.2f, 0.2f, 0.4f, 1), "system/tools/code_module/code.lua");
         switchModule("Code");
@@ -72,6 +78,21 @@ public class EditorScreen extends ScreenAdapter {
 
     @Override
     public void render(float delta) {
+        // Handle Escape/Back key to exit to desktop
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) || Gdx.input.isKeyJustPressed(Input.Keys.BACK)) {
+            // Save current state
+            if (currentModule != null) {
+                currentModule.onBlur();
+            }
+            // Return to desktop with minimized project
+            DesktopScreen desktop = new DesktopScreen(game);
+            if (projectDir != null) {
+                desktop.addMinimizedEditor(projectDir);
+            }
+            game.setScreen(desktop);
+            return;
+        }
+        
         Gdx.gl.glClearColor(0.05f, 0.05f, 0.05f, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 

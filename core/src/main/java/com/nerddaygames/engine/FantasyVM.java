@@ -276,6 +276,10 @@ public class FantasyVM {
 
     public Texture getOsTexture() { return osBuffer.getColorBufferTexture(); }
     public Texture getGameTexture() { return gameBuffer.getColorBufferTexture(); }
+    
+    // Getters for coordinate system calculation in ScriptEngine
+    public FrameBuffer getGameBuffer() { return gameBuffer; }
+    public FrameBuffer getCurrentTarget() { return currentTarget; }
 
     public void update(float delta) {
         if (hasCrashed) {
