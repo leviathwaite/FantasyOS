@@ -24,9 +24,10 @@ Config.keys = {
   SHIFT_L=59, SHIFT_R=60,
   CTRL_L=129, CTRL_R=130,
   ALT_L=57, ALT_R=58,
-  A=29, C=31, F=34, R=46, S=47,
+  A=29, C=31, F=34, G=35, R=46, S=47,
   V=50, X=52, Y=53, Z=54,
-  MINUS=69, EQUALS=70
+  MINUS=69, EQUALS=70,
+  F3=133
 }
 
 -- Controls Bar
@@ -36,6 +37,15 @@ Config.controls = {
     {id = "save", label = "Save", x = 10, w = 80},
     {id = "run",  label = "Run",  x = 100, w = 80}
   }
+}
+
+-- Feature flags
+Config.features = {
+  auto_indent = true,
+  bracket_matching = true,
+  horizontal_scroll = true,
+  line_wrapping = false,
+  syntax_highlighting = true
 }
 
 return Config
