@@ -117,7 +117,14 @@ public class ScriptEngine {
                         Color c = (vm.palette != null && colorIndex >= 0 && colorIndex < vm.palette.size())
                             ? vm.palette.get(colorIndex) : Color.WHITE;
                         font.setColor(c);
-                        font.draw(vm.batch, s, x, y);
+                        
+                        // Fix Y-coordinate for text rendering
+                        // Camera uses Y=0 at bottom (setToOrtho(false)), but Lua expects Y=0 at top
+                        // Transform: flip Y and add font height for proper baseline positioning
+                        float fontHeight = font.getLineHeight();
+                        float drawY = (vm.currentTarget == vm.gameBuffer ? vm.profile.gameHeight : vm.profile.height) - y - fontHeight;
+                        
+                        font.draw(vm.batch, s, x, drawY);
                     } else {
                         // Fallback only if no font
                         System.out.println(s);

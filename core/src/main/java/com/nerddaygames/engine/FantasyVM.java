@@ -28,8 +28,8 @@ public class FantasyVM {
 
     // --- DISPLAY SURFACES ---
     private FrameBuffer osBuffer;
-    private FrameBuffer gameBuffer;
-    private FrameBuffer currentTarget;
+    public FrameBuffer gameBuffer; // Made public for ScriptEngine text coordinate fix
+    public FrameBuffer currentTarget; // Made public for ScriptEngine text coordinate fix
 
     private OrthographicCamera osCamera;
     private OrthographicCamera gameCamera;
