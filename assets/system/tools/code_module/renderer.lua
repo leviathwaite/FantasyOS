@@ -55,8 +55,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
     -- Draw editor content area
     -- what is labeled top is actually the bottom of the screen space
     if rect then
-        --rect(win_x, content_top, win_w, content_height, Config.colors.bg)
-        rect(win_x, 20, win_w, content_height, 0)
+        rect(win_x, content_top, win_w, content_height, Config.colors.bg)
     end
 
     -- Draw line numbers and text
@@ -77,13 +76,87 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
             print(tostring(line_idx), win_x + 4, line_y, Config.colors.gutter_fg)
         end
 
-        -- Draw text line
+        -- Draw selection highlight if applicable
+        if buf.sel_start_y and buf.sel_end_y then
+            local sel_start_y = math.min(buf.sel_start_y, buf.sel_end_y)
+            local sel_end_y = math.max(buf.sel_start_y, buf.sel_end_y)
+            local sel_start_x = (buf.sel_start_y < buf.sel_end_y or (buf.sel_start_y == buf.sel_end_y and buf.sel_start_x <= buf.sel_end_x)) and buf.sel_start_x or buf.sel_end_x
+            local sel_end_x = (buf.sel_start_y < buf.sel_end_y or (buf.sel_start_y == buf.sel_end_y and buf.sel_start_x <= buf.sel_end_x)) and buf.sel_end_x or buf.sel_start_x
+            
+            if line_idx >= sel_start_y and line_idx <= sel_end_y then
+                local line_text = buf.lines[line_idx] or ""
+                local highlight_start_x = text_x
+                local highlight_width = 0
+                
+                if line_idx == sel_start_y and line_idx == sel_end_y then
+                    -- Selection on single line
+                    if text_width then
+                        local before_text = string.sub(line_text, 1, sel_start_x)
+                        local sel_text = string.sub(line_text, sel_start_x + 1, sel_end_x)
+                        highlight_start_x = text_x + (text_width(before_text) or (sel_start_x * Config.font_w))
+                        highlight_width = text_width(sel_text) or ((sel_end_x - sel_start_x) * Config.font_w)
+                    else
+                        highlight_start_x = text_x + (sel_start_x * Config.font_w)
+                        highlight_width = (sel_end_x - sel_start_x) * Config.font_w
+                    end
+                elseif line_idx == sel_start_y then
+                    -- First line of multi-line selection
+                    if text_width then
+                        local before_text = string.sub(line_text, 1, sel_start_x)
+                        highlight_start_x = text_x + (text_width(before_text) or (sel_start_x * Config.font_w))
+                        highlight_width = text_width(string.sub(line_text, sel_start_x + 1)) or ((#line_text - sel_start_x) * Config.font_w)
+                    else
+                        highlight_start_x = text_x + (sel_start_x * Config.font_w)
+                        highlight_width = (#line_text - sel_start_x) * Config.font_w
+                    end
+                elseif line_idx == sel_end_y then
+                    -- Last line of multi-line selection
+                    if text_width then
+                        local sel_text = string.sub(line_text, 1, sel_end_x)
+                        highlight_width = text_width(sel_text) or (sel_end_x * Config.font_w)
+                    else
+                        highlight_width = sel_end_x * Config.font_w
+                    end
+                else
+                    -- Middle line of multi-line selection
+                    if text_width then
+                        highlight_width = text_width(line_text) or (#line_text * Config.font_w)
+                    else
+                        highlight_width = #line_text * Config.font_w
+                    end
+                end
+                
+                -- Draw selection highlight
+                if rect and highlight_width > 0 then
+                    rect(highlight_start_x, content_top + (i * Config.line_h), highlight_width, Config.line_h, Config.colors.selection)
+                end
+            end
+        end
+
+        -- Draw text line with syntax highlighting
         local line_text = buf.lines[line_idx] or ""
         local text_x = win_x + gutter_width
 
-        -- Simple rendering without syntax highlighting for now
         if print and #line_text > 0 then
-            print(line_text, text_x, line_y, Config.colors.text)
+            -- Parse tokens for syntax highlighting
+            local tokens = Syntax:parse(line_text)
+            local current_x = text_x
+            
+            for _, token in ipairs(tokens) do
+                print(token.text, current_x, line_y, token.color)
+                
+                -- Calculate width for next token
+                if text_width then
+                    local width = text_width(token.text)
+                    if width then
+                        current_x = current_x + width
+                    else
+                        current_x = current_x + (#token.text * Config.font_w)
+                    end
+                else
+                    current_x = current_x + (#token.text * Config.font_w)
+                end
+            end
         end
 
         -- Draw cursor on current line
@@ -115,8 +188,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
     -- Draw tab bar at bottom (above controls)
     local tab_bar_y = content_bottom
     if rect then
-        rect(win_x, 100, win_w, tab_bar_height, 7)
-        --rect(win_x, tab_bar_y, win_w, tab_bar_height, Config.colors.gutter_bg)
+        rect(win_x, tab_bar_y, win_w, tab_bar_height, Config.colors.gutter_bg)
     end
 
     local tx = win_x + 10
