@@ -122,7 +122,7 @@ public class ScriptEngine {
                         // Camera uses Y=0 at bottom (setToOrtho(false)), but Lua expects Y=0 at top
                         // Transform: flip Y and add font height for proper baseline positioning
                         float fontHeight = font.getLineHeight();
-                        float drawY = (vm.currentTarget == vm.gameBuffer ? vm.profile.gameHeight : vm.profile.height) - y - fontHeight;
+                        float drawY = (vm.getCurrentTarget() == vm.getGameBuffer() ? vm.profile.gameHeight : vm.profile.height) - y - fontHeight;
                         
                         font.draw(vm.batch, s, x, drawY);
                     } else {

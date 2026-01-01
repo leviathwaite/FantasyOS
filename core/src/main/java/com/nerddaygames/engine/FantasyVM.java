@@ -28,8 +28,8 @@ public class FantasyVM {
 
     // --- DISPLAY SURFACES ---
     private FrameBuffer osBuffer;
-    public FrameBuffer gameBuffer; // Made public for ScriptEngine text coordinate fix
-    public FrameBuffer currentTarget; // Made public for ScriptEngine text coordinate fix
+    private FrameBuffer gameBuffer;
+    private FrameBuffer currentTarget;
 
     private OrthographicCamera osCamera;
     private OrthographicCamera gameCamera;
@@ -276,6 +276,10 @@ public class FantasyVM {
 
     public Texture getOsTexture() { return osBuffer.getColorBufferTexture(); }
     public Texture getGameTexture() { return gameBuffer.getColorBufferTexture(); }
+    
+    // Getters for coordinate system calculation in ScriptEngine
+    public FrameBuffer getGameBuffer() { return gameBuffer; }
+    public FrameBuffer getCurrentTarget() { return currentTarget; }
 
     public void update(float delta) {
         if (hasCrashed) {
