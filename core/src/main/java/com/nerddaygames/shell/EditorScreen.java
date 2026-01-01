@@ -23,6 +23,7 @@ import java.util.Map;
 
 public class EditorScreen extends ScreenAdapter {
     private final Main game;
+    private final FileHandle projectDir; // Store project directory for minimizing
     private SpriteBatch uiBatch;
     private ShapeRenderer uiShapes;
     private BitmapFont uiFont;
@@ -35,6 +36,7 @@ public class EditorScreen extends ScreenAdapter {
 
     public EditorScreen(Main game, FileHandle projectDir) {
         this.game = game;
+        this.projectDir = projectDir; // Store for later use
         uiBatch = new SpriteBatch();
         uiShapes = new ShapeRenderer();
         uiFont = new BitmapFont(true); // Flipped for Y-Down
@@ -83,8 +85,9 @@ public class EditorScreen extends ScreenAdapter {
             }
             // Return to desktop with minimized project
             DesktopScreen desktop = new DesktopScreen(game);
-            // Note: EditorScreen doesn't have projectDir field, but if it did, we would pass it here
-            // For now, just transition to desktop
+            if (projectDir != null) {
+                desktop.addMinimizedEditor(projectDir);
+            }
             game.setScreen(desktop);
             return;
         }
