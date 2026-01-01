@@ -36,10 +36,7 @@ import java.util.Queue;
 import java.util.Set;
 
 /**
- * LuaTool - editor integration: input handling (no duplicate printable chars),
- * controlled repeat for control keys, font measurement helpers, dynamic gutter support.
- *
- * Note: This file includes the public callFunction(...) method used by EditorScreen.
+ * LuaTool - editor integration with comprehensive debugging
  */
 public class LuaTool implements ToolModule {
     private final String name;
@@ -90,11 +87,11 @@ public class LuaTool implements ToolModule {
     // Input state
     private final Object keyLock = new Object();
     private final Set<Integer> keysDown = new HashSet<>();
-    private final Set<Integer> keysPressed = new HashSet<>(); // consumed by keyp()
+    private final Set<Integer> keysPressed = new HashSet<>();
     private final Queue<Character> charQueue = new ArrayDeque<>();
     private volatile float scrollDelta = 0f;
 
-    // Key repeat (controls only)
+    // Key repeat
     private final Map<Integer, Long> keyDownTime = new HashMap<>();
     private final Map<Integer, Long> lastRepeatTime = new HashMap<>();
     private long KEY_REPEAT_INITIAL_MS = 400L;
@@ -114,34 +111,47 @@ public class LuaTool implements ToolModule {
         this.shapes = new ShapeRenderer();
         this.font = new BitmapFont();
         this.inputProcessor = new ToolInputProcessor();
+
+        System.out.println("[LuaTool] Constructor called for: " + name);
     }
 
     @Override public String getName() { return name; }
 
     @Override
     public void load() {
+        System.out.println("[LuaTool] load() called for: " + name + " with script: " + scriptPath);
+
         try {
             FileHandle handle = Gdx.files.internal(scriptPath);
             if (handle != null && handle.exists()) {
+                System.out.println("[LuaTool] Script file found: " + scriptPath);
                 String script = handle.readString(StandardCharsets.UTF_8.name());
+                System.out.println("[LuaTool] Script loaded, length: " + script.length() + " chars");
+
                 LuaValue chunk = globals.load(script, scriptPath);
                 initChunk = chunk.checkfunction();
+
                 Gdx.app.log("LuaTool", "Compiled (no-exec) script: " + scriptPath);
+                System.out.println("[LuaTool] Script compiled successfully");
             } else {
                 Gdx.app.log("LuaTool", "Script not found: " + scriptPath);
+                System.err.println("[LuaTool] ERROR: Script file not found: " + scriptPath);
             }
         } catch (Exception e) {
             Gdx.app.error("LuaTool", "Failed to compile script: " + scriptPath + " : " + e.getMessage(), e);
+            System.err.println("[LuaTool] EXCEPTION during load: " + e.getMessage());
+            e.printStackTrace();
         }
 
+        System.out.println("[LuaTool] Binding Lua functions...");
         bindDrawingFunctions();
+        bindConsoleLog();
         bindInputBindings();
         bindKeyConstants();
         bindRunFunction();
         bindFontHelpers();
         bindToastFunctions();
 
-        // allow Lua to tell Java the gutter width dynamically
         globals.set("set_gutter_left", new OneArgFunction() {
             @Override public LuaValue call(LuaValue px) {
                 try { setInputGutterLeft(px.checkint()); } catch (Exception ignored) {}
@@ -150,6 +160,8 @@ public class LuaTool implements ToolModule {
         });
 
         globals.set("caret_offset_x", LuaValue.valueOf(caretOffsetX));
+
+        System.out.println("[LuaTool] load() complete for: " + name);
     }
 
     private void ensureFbo(int w, int h) {
@@ -199,7 +211,6 @@ public class LuaTool implements ToolModule {
             }
         });
 
-        // mouse() mapping into FBO / editor coordinate space; respects gutter set by Lua via set_gutter_left
         globals.set("mouse", new ZeroArgFunction() {
             @Override public LuaValue call() {
                 org.luaj.vm2.LuaTable t = new org.luaj.vm2.LuaTable();
@@ -237,6 +248,16 @@ public class LuaTool implements ToolModule {
                 t.set("scroll", LuaValue.valueOf((int) scrollDelta));
                 scrollDelta = 0f;
                 return t;
+            }
+        });
+    }
+
+    private void bindConsoleLog() {
+        // Console logging that goes directly to System.out
+        globals.set("log", new OneArgFunction() {
+            @Override public LuaValue call(LuaValue msg) {
+                System.out.println("[Lua] " + msg.tojstring());
+                return LuaValue.NIL;
             }
         });
     }
@@ -493,9 +514,9 @@ public class LuaTool implements ToolModule {
     }
     public int getCaretXOffset() { return caretOffsetX; }
 
-    // ToolModule required methods
     @Override
     public void resize(int w, int h) {
+        System.out.println("[LuaTool] resize() called: " + w + "x" + h);
         ensureFbo(Math.max(16, w), Math.max(16, h));
         try {
             LuaValue f = globals.get("onResize");
@@ -505,13 +526,23 @@ public class LuaTool implements ToolModule {
 
     @Override
     public void onFocus() {
+        System.out.println("[LuaTool] onFocus() called, initialized=" + initialized);
+
         if (!initialized) {
             try {
-                if (initChunk != null) initChunk.call();
-                initialized = true;
-                Gdx.app.log("LuaTool", "Initialized tool onFocus: " + scriptPath);
+                if (initChunk != null) {
+                    System.out.println("[LuaTool] Executing initChunk...");
+                    initChunk.call();
+                    initialized = true;
+                    Gdx.app.log("LuaTool", "Initialized tool onFocus: " + scriptPath);
+                    System.out.println("[LuaTool] initChunk executed successfully");
+                } else {
+                    System.err.println("[LuaTool] ERROR: initChunk is null!");
+                }
             } catch (Exception e) {
                 Gdx.app.error("LuaTool", "Initialization failed in onFocus: " + e.getMessage(), e);
+                System.err.println("[LuaTool] EXCEPTION in onFocus: " + e.getMessage());
+                e.printStackTrace();
             }
         } else {
             try {
@@ -540,7 +571,9 @@ public class LuaTool implements ToolModule {
         try {
             LuaValue f = globals.get("_update");
             if (f != null && !f.isnil()) f.call();
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            System.err.println("[LuaTool] Exception in _update(): " + e.getMessage());
+        }
     }
 
     private void processKeyRepeats() {
@@ -573,15 +606,38 @@ public class LuaTool implements ToolModule {
 
     @Override
     public void render() {
-        if (!initialized) return;
-        try { LuaValue f = globals.get("_draw"); if (f != null && !f.isnil()) f.call(); } catch (Exception ignored) {}
+        if (!initialized) {
+            System.out.println("[LuaTool] render() - NOT INITIALIZED");
+            return;
+        }
 
-        if (fbo == null) ensureFbo(fboWidth, fboHeight);
+        // Call _draw() to populate command queue
+        try {
+            LuaValue f = globals.get("_draw");
+            if (f != null && !f.isnil()) {
+                f.call();
+            } else {
+                System.err.println("[LuaTool] render() - _draw is null or nil!");
+            }
+        } catch (Exception e) {
+            System.err.println("[LuaTool] render() - Exception in _draw(): " + e.getMessage());
+            e.printStackTrace();
+        }
 
+        // Ensure FBO exists
+        if (fbo == null) {
+            System.out.println("[LuaTool] render() - FBO is null, creating...");
+            ensureFbo(fboWidth, fboHeight);
+        }
+
+        // Render to FBO
         fbo.begin();
-        Gdx.gl.glClearColor(0f, 0f, 0f, 1f);
+
+        // DEBUGGING: Red clear color to verify FBO works
+        Gdx.gl.glClearColor(1f, 0f, 0f, 1f);
         Gdx.gl.glClear(Gdx.gl.GL_COLOR_BUFFER_BIT);
 
+        // Draw shapes
         shapes.begin(ShapeRenderer.ShapeType.Filled);
         synchronized (cmdQueue) {
             for (DrawCmd c : cmdQueue) {
@@ -595,6 +651,7 @@ public class LuaTool implements ToolModule {
         }
         shapes.end();
 
+        // Draw text
         batch.begin();
         synchronized (cmdQueue) {
             for (DrawCmd c : cmdQueue) {
@@ -607,6 +664,8 @@ public class LuaTool implements ToolModule {
             }
             cmdQueue.clear();
         }
+
+        // Draw toasts
         synchronized (toasts) {
             long now = System.currentTimeMillis();
             float y = fboHeight - 20f;
@@ -640,6 +699,8 @@ public class LuaTool implements ToolModule {
             case 1: return new Color(0.06f,0.06f,0.06f,1f);
             case 2: return new Color(0.1f,0.6f,0.1f,1f);
             case 7: return new Color(0.9f,0.9f,0.9f,1f);
+            case 8: return new Color(1f,0f,0f,1f);  // RED
+            case 9: return new Color(1f,0.5f,0f,1f);
             case 10: return new Color(1f,0.8f,0f,1f);
             case 11: return new Color(1f,0.6f,0.6f,1f);
             case 12: return new Color(0.2f,0.6f,1f,1f);
@@ -674,7 +735,6 @@ public class LuaTool implements ToolModule {
         }
     }
 
-    // ToolInputProcessor - printable chars come from keyTyped only; special keys handled in keyDown/processKeyRepeats
     private class ToolInputProcessor implements InputProcessor {
         @Override public boolean keyDown(int keycode) {
             synchronized (keyLock) {
@@ -715,13 +775,6 @@ public class LuaTool implements ToolModule {
         @Override public boolean touchCancelled(int screenX, int screenY, int pointer, int button) { return false; }
     }
 
-    /**
-     * Public helper used by EditorScreen and other Java callers to invoke Lua functions.
-     * Usage:
-     *   callFunction("tableName", "functionName", arg1, arg2, ...)
-     * or
-     *   callFunction(null, "functionName", arg1, arg2, ...)
-     */
     public LuaValue callFunction(String tableName, String functionName, Object... args) {
         try {
             LuaValue table = (tableName != null) ? globals.get(tableName) : globals;
@@ -746,9 +799,6 @@ public class LuaTool implements ToolModule {
         }
     }
 
-    /**
-     * Convenience overload: call global function (no table).
-     */
     public LuaValue callFunction(String functionName, Object... args) {
         return callFunction(null, functionName, args);
     }
