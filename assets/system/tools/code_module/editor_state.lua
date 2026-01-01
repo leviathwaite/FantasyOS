@@ -1,6 +1,7 @@
 local Config = require("system/tools/code_module/config")
 local Clipboard = require("system/tools/code_module/clipboard")
 local Indent = require("system/tools/code_module/indent")
+local Search = require("system/tools/code_module/search")
 
 local State = {}
 
@@ -8,6 +9,8 @@ State.tabs = {}
 State.current_tab = 1
 State.untitled_counter = 1
 State.clipboard = ""  -- Kept for backwards compatibility
+State.dialog_mode = nil  -- "search", "goto", nil
+State.dialog_input = ""
 
 -- Debug helper
 local function debug_log(msg)
@@ -210,6 +213,88 @@ function State.handle_input()
 
     local K = Config.keys
     local ctrl = btnp_safe(K.CTRL_L) or btnp_safe(K.CTRL_R)
+    local shift = btnp_safe(K.SHIFT_L) or btnp_safe(K.SHIFT_R)
+
+    -- Handle dialog mode input
+    if State.dialog_mode then
+        -- ESC to cancel dialog
+        if btnp_safe(K.BACK) and #State.dialog_input == 0 then
+            State.dialog_mode = nil
+            State.dialog_input = ""
+            return
+        end
+        
+        -- Backspace in dialog
+        if btnp_safe(K.BACK) and #State.dialog_input > 0 then
+            State.dialog_input = string.sub(State.dialog_input, 1, -2)
+            return
+        end
+        
+        -- Enter to execute dialog action
+        if btnp_safe(K.ENTER) then
+            if State.dialog_mode == "goto" then
+                local line_num = tonumber(State.dialog_input)
+                if line_num and line_num >= 1 and line_num <= #buf.lines then
+                    buf.cy = line_num
+                    buf.cx = 0
+                    show_toast("⇒ Go to line " .. line_num)
+                else
+                    show_toast("✗ Invalid line number")
+                end
+            elseif State.dialog_mode == "search" then
+                if #State.dialog_input > 0 then
+                    Search.activate(State.dialog_input)
+                    Search.find_all(buf, State.dialog_input)
+                    if #Search.matches > 0 then
+                        Search.find_next(buf)
+                        show_toast("🔍 Found " .. #Search.matches .. " matches")
+                    else
+                        show_toast("No matches found")
+                    end
+                end
+            end
+            State.dialog_mode = nil
+            State.dialog_input = ""
+            return
+        end
+        
+        -- Type into dialog
+        local ch = kbchar()
+        while ch do
+            State.dialog_input = State.dialog_input .. ch
+            ch = kbchar()
+        end
+        
+        return  -- Don't process other input while in dialog
+    end
+
+    -- Find Next (F3)
+    if btnp_safe(K.F3) and not ctrl then
+        if Search.active and #Search.matches > 0 then
+            if shift then
+                Search.find_previous(buf)
+            else
+                Search.find_next(buf)
+            end
+        end
+        return
+    end
+
+    -- Find (Ctrl+F)
+    if ctrl and btnp_safe(K.F) then
+        State.dialog_mode = "search"
+        State.dialog_input = ""
+        show_toast("🔍 Enter search query")
+        return
+    end
+
+    -- Go to Line (Ctrl+G)
+    if ctrl and btnp_safe(K.G) then
+        State.dialog_mode = "goto"
+        State.dialog_input = ""
+        show_toast("⇒ Enter line number")
+        return
+    end
 
     -- Save (Ctrl+S) - COMPREHENSIVE FIX
     if ctrl and btnp_safe(K.S) then

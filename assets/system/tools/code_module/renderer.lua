@@ -240,6 +240,32 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
         print("[Save]", win_x + 10, controls_y + 12, Config.colors.help_text)
         print("[Run]", win_x + 100, controls_y + 12, Config.colors.help_text)
     end
+    
+    -- Draw dialog overlay if active
+    if State.dialog_mode then
+        local overlay_h = 80
+        local overlay_y = win_y + (win_h - overlay_h) / 2
+        local overlay_w = 400
+        local overlay_x = win_x + (win_w - overlay_w) / 2
+        
+        if rect then
+            rect(overlay_x, overlay_y, overlay_w, overlay_h, Config.colors.gutter_bg)
+        end
+        
+        if print then
+            local label_y = overlay_y + 10
+            if State.dialog_mode == "goto" then
+                print("Go to Line:", overlay_x + 10, label_y, Config.colors.help_title)
+            elseif State.dialog_mode == "search" then
+                print("Find:", overlay_x + 10, label_y, Config.colors.help_title)
+            end
+            
+            -- Draw input with cursor
+            local input_y = label_y + 25
+            local input_text = State.dialog_input .. "_"
+            print(input_text, overlay_x + 10, input_y, Config.colors.help_example)
+        end
+    end
 end
 
 return Renderer
