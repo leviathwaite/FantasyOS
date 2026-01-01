@@ -1,5 +1,7 @@
 local Config = require("system/tools/code_module/config")
 local Syntax = require("system/tools/code_module/syntax")
+local Scroll = require("system/tools/code_module/scroll")
+local Brackets = require("system/tools/code_module/brackets")
 local Renderer = {}
 
 function Renderer.draw(State, win_x, win_y, win_w, win_h)
@@ -36,12 +38,12 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
     local content_height = content_bottom - content_top
 
     local visible_lines = math.floor(content_height / Config.line_h)
+    local visible_width = win_w - gutter_width
 
     -- Update scroll to keep cursor visible
-    if buf.cy <= buf.scroll_y then
-        buf.scroll_y = math.max(0, buf.cy - 1)
-    elseif buf.cy > buf.scroll_y + visible_lines then
-        buf.scroll_y = buf.cy - visible_lines
+    Scroll.ensure_cursor_visible_vertical(buf, visible_lines)
+    if Config.features.horizontal_scroll then
+        Scroll.ensure_cursor_visible_horizontal(buf, visible_width)
     end
 
     -- Draw help bar at top
@@ -136,26 +138,32 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
         -- Draw text line with syntax highlighting
         local line_text = buf.lines[line_idx] or ""
         local text_x = win_x + gutter_width
+        
+        -- Apply horizontal scroll offset
+        local scroll_offset = 0
+        if Config.features.horizontal_scroll and buf.scroll_x then
+            scroll_offset = buf.scroll_x
+        end
 
         if print and #line_text > 0 then
             -- Parse tokens for syntax highlighting
             local tokens = Syntax:parse(line_text)
-            local current_x = text_x
+            local current_x = text_x - scroll_offset
             
             for _, token in ipairs(tokens) do
-                print(token.text, current_x, line_y, token.color)
-                
-                -- Calculate width for next token
+                -- Only render tokens that are visible
+                local token_width = 0
                 if text_width then
-                    local width = text_width(token.text)
-                    if width then
-                        current_x = current_x + width
-                    else
-                        current_x = current_x + (#token.text * Config.font_w)
-                    end
+                    token_width = text_width(token.text) or (#token.text * Config.font_w)
                 else
-                    current_x = current_x + (#token.text * Config.font_w)
+                    token_width = #token.text * Config.font_w
                 end
+                
+                if current_x + token_width >= text_x and current_x < text_x + visible_width then
+                    print(token.text, current_x, line_y, token.color)
+                end
+                
+                current_x = current_x + token_width
             end
         end
 
@@ -177,10 +185,28 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
                     cursor_x = cursor_x + (buf.cx * Config.font_w)
                 end
             end
+            
+            -- Apply horizontal scroll offset to cursor
+            if Config.features.horizontal_scroll and buf.scroll_x then
+                cursor_x = cursor_x - buf.scroll_x
+            end
 
             -- Draw cursor
             if rect then
                 rect(cursor_x, line_y - 2, 2, Config.line_h - 4, Config.colors.cursor)
+            end
+        end
+    end
+
+    -- Draw bracket matching highlight
+    if Config.features.bracket_matching then
+        local match_line, match_col = Brackets.find_matching_bracket(buf)
+        if match_line and match_col then
+            -- Check if matching bracket is visible
+            local visible_start = buf.scroll_y + 1
+            local visible_end = buf.scroll_y + visible_lines
+            if match_line >= visible_start and match_line <= visible_end then
+                Brackets.draw_highlight(buf, match_line, match_col, win_x, win_y, content_top, gutter_width)
             end
         end
     end

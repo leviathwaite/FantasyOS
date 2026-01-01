@@ -1,10 +1,13 @@
 local Config = require("system/tools/code_module/config")
+local Clipboard = require("system/tools/code_module/clipboard")
+local Indent = require("system/tools/code_module/indent")
+
 local State = {}
 
 State.tabs = {}
 State.current_tab = 1
 State.untitled_counter = 1
-State.clipboard = ""
+State.clipboard = ""  -- Kept for backwards compatibility
 
 -- Debug helper
 local function debug_log(msg)
@@ -76,7 +79,7 @@ function State.new_buffer(path, text)
         path = path,
         lines = State.split_lines(text),
         undo = UndoStack.new(),
-        cx = 0, cy = 1, scroll_y = 0,
+        cx = 0, cy = 1, scroll_y = 0, scroll_x = 0,
         modified = false, blink = 0,
         sel_start_x = nil, sel_start_y = nil, sel_end_x = nil, sel_end_y = nil,
         mouse_selecting = false
@@ -277,10 +280,10 @@ function State.handle_input()
 
     -- Copy (Ctrl+C)
     if ctrl and btnp_safe(K.C) then
-        local selected_text = State.get_selection_text(buf)
-        if selected_text then
-            State.clipboard = selected_text
-            show_toast("📋 Copied " .. #selected_text .. " characters")
+        local success, count = Clipboard.copy(buf)
+        if success then
+            State.clipboard = Clipboard.content  -- Sync for backwards compatibility
+            show_toast("📋 Copied " .. count .. " characters")
         else
             show_toast("No selection to copy")
         end
@@ -289,12 +292,11 @@ function State.handle_input()
 
     -- Cut (Ctrl+X)
     if ctrl and btnp_safe(K.X) then
-        local selected_text = State.get_selection_text(buf)
-        if selected_text then
-            buf.undo:push(State.get_snapshot(buf))
-            State.clipboard = selected_text
-            State.delete_selection(buf)
-            show_toast("✂ Cut " .. #selected_text .. " characters")
+        buf.undo:push(State.get_snapshot(buf))
+        local success, count = Clipboard.cut(buf)
+        if success then
+            State.clipboard = Clipboard.content  -- Sync for backwards compatibility
+            show_toast("✂ Cut " .. count .. " characters")
         else
             show_toast("No selection to cut")
         end
@@ -303,39 +305,17 @@ function State.handle_input()
 
     -- Paste (Ctrl+V)
     if ctrl and btnp_safe(K.V) then
+        -- Sync clipboard from State for backwards compatibility
         if State.clipboard and #State.clipboard > 0 then
+            Clipboard.content = State.clipboard
+        end
+        
+        if Clipboard.content and #Clipboard.content > 0 then
             buf.undo:push(State.get_snapshot(buf))
-            
-            -- Delete selection if any
-            if buf.sel_start_y and buf.sel_end_y then
-                State.delete_selection(buf)
+            local success = Clipboard.paste(buf, State.split_lines)
+            if success then
+                show_toast("📄 Pasted " .. #Clipboard.content .. " characters")
             end
-            
-            -- Insert clipboard content
-            local lines = State.split_lines(State.clipboard)
-            local current_line = buf.lines[buf.cy] or ""
-            
-            if #lines == 1 then
-                -- Single line paste
-                buf.lines[buf.cy] = string.sub(current_line, 1, buf.cx) .. lines[1] .. string.sub(current_line, buf.cx + 1)
-                buf.cx = buf.cx + #lines[1]
-            else
-                -- Multi-line paste
-                local before = string.sub(current_line, 1, buf.cx)
-                local after = string.sub(current_line, buf.cx + 1)
-                
-                buf.lines[buf.cy] = before .. lines[1]
-                for i = 2, #lines - 1 do
-                    table.insert(buf.lines, buf.cy + i - 1, lines[i])
-                end
-                table.insert(buf.lines, buf.cy + #lines - 1, lines[#lines] .. after)
-                
-                buf.cy = buf.cy + #lines - 1
-                buf.cx = #lines[#lines]
-            end
-            
-            buf.modified = true
-            show_toast("📄 Pasted " .. #State.clipboard .. " characters")
         else
             show_toast("Clipboard is empty")
         end
@@ -444,6 +424,12 @@ function State.handle_input()
         table.insert(buf.lines, buf.cy+1, post)
         buf.cy = buf.cy + 1
         buf.cx = 0
+        
+        -- Apply auto-indent if enabled
+        if Config.features.auto_indent then
+            Indent.apply_auto_indent(buf)
+        end
+        
         buf.modified = true
         buf.blink = 0
     end
