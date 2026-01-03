@@ -96,6 +96,9 @@ function Clipboard.copy(buf)
     local text = Clipboard.get_selection_text(buf)
     if text then
         Clipboard.content = text
+        if clipboard and clipboard.set then
+            clipboard.set(text)
+        end
         return true, #text
     end
     return false, 0
@@ -106,6 +109,9 @@ function Clipboard.cut(buf)
     local text = Clipboard.get_selection_text(buf)
     if text then
         Clipboard.content = text
+        if clipboard and clipboard.set then
+            clipboard.set(text)
+        end
         Clipboard.delete_selection(buf)
         return true, #text
     end
@@ -114,7 +120,15 @@ end
 
 -- Paste clipboard content at cursor
 function Clipboard.paste(buf, split_lines_fn)
-    if not Clipboard.content or #Clipboard.content == 0 then
+    local content = Clipboard.content
+    
+    -- Try system clipboard first
+    if clipboard and clipboard.get then
+        local sys_content = clipboard.get()
+        if sys_content then content = sys_content end
+    end
+
+    if not content or #content == 0 then
         return false
     end
     
@@ -124,7 +138,7 @@ function Clipboard.paste(buf, split_lines_fn)
     end
     
     -- Insert clipboard content
-    local lines = split_lines_fn(Clipboard.content)
+    local lines = split_lines_fn(content)
     local current_line = buf.lines[buf.cy] or ""
     
     if #lines == 1 then

@@ -1,4 +1,5 @@
 local Config = require("system/tools/code_module/config")
+local HelpDB = require("system/tools/code_module/help_db")
 
 local Syntax = {}
 Syntax.__index = Syntax
@@ -13,7 +14,9 @@ function Syntax.new()
   }
   -- Add API docs globals if available
   s.funcs = {}
-  if api_docs then for k,_ in pairs(api_docs) do s.funcs[k] = 1 end end
+  if HelpDB and HelpDB.funcs then
+    for k,_ in pairs(HelpDB.funcs) do s.funcs[k] = 1 end
+  end
 
   s.patterns = {
     {"^%-%-.*", Config.colors.comment},

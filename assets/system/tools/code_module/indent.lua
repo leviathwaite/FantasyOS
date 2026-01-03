@@ -45,10 +45,12 @@ end
 -- Check if line ends with keyword that increases indent
 function Indent.should_increase_indent(line)
     local trimmed = string.gsub(line, "^%s*(.-)%s*$", "%1")
+    -- Pad with spaces to make matching easier
+    local padded = " " .. trimmed .. " "
     
     for _, keyword in ipairs(Indent.increase_keywords) do
-        -- Check if line contains the keyword
-        if string.find(trimmed, "%f[%a]" .. keyword .. "%f[%A]") then
+        -- Check for whole word match: non-alphanumeric before and after
+        if string.find(padded, "[^%w_]" .. keyword .. "[^%w_]") then
             -- Don't increase indent if line also ends with "end"
             if not string.match(trimmed, "end%s*$") then
                 return true
@@ -62,9 +64,13 @@ end
 -- Check if current line starts with keyword that decreases indent
 function Indent.should_decrease_indent(line)
     local trimmed = string.gsub(line, "^%s*(.-)%s*$", "%1")
+    local padded = " " .. trimmed .. " "
     
     for _, keyword in ipairs(Indent.decrease_keywords) do
-        if string.find(trimmed, "^" .. keyword .. "%f[%A]") then
+        -- Check for start of line match (which means after the initial padding space)
+        -- Actually, should_decrease_indent checks if the line STARTS with the keyword.
+        -- So we check if padded starts with " "..keyword..boundary
+        if string.find(padded, "^ " .. keyword .. "[^%w_]") then
             return true
         end
     end

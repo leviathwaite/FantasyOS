@@ -206,329 +206,152 @@ function State.delete_selection(buf)
     return true
 end
 
-function State.handle_input()
-    local buf = State.get_current()
-    if not buf then return end
-    buf.blink = (buf.blink or 0) + 1
 
-    local K = Config.keys
-    local ctrl = btnp_safe(K.CTRL_L) or btnp_safe(K.CTRL_R)
-    local shift = btnp_safe(K.SHIFT_L) or btnp_safe(K.SHIFT_R)
 
-    -- Handle dialog mode input
-    if State.dialog_mode then
-        -- ESC to cancel dialog
-        if btnp_safe(K.BACK) and #State.dialog_input == 0 then
-            State.dialog_mode = nil
-            State.dialog_input = ""
-            return
-        end
-        
-        -- Backspace in dialog
-        if btnp_safe(K.BACK) and #State.dialog_input > 0 then
-            State.dialog_input = string.sub(State.dialog_input, 1, -2)
-            return
-        end
-        
-        -- Enter to execute dialog action
-        if btnp_safe(K.ENTER) then
-            if State.dialog_mode == "goto" then
-                local line_num = tonumber(State.dialog_input)
-                if line_num and line_num >= 1 and line_num <= #buf.lines then
-                    buf.cy = line_num
-                    buf.cx = 0
-                    show_toast("⇒ Go to line " .. line_num)
-                else
-                    show_toast("✗ Invalid line number")
-                end
-            elseif State.dialog_mode == "search" then
-                if #State.dialog_input > 0 then
-                    Search.activate(State.dialog_input)
-                    Search.find_all(buf, State.dialog_input)
-                    if #Search.matches > 0 then
-                        Search.find_next(buf)
-                        show_toast("🔍 Found " .. #Search.matches .. " matches")
-                    else
-                        show_toast("No matches found")
-                    end
-                end
-            end
-            State.dialog_mode = nil
-            State.dialog_input = ""
-            return
-        end
-        
-        -- Type into dialog
-        local ch = kbchar()
-        while ch do
-            State.dialog_input = State.dialog_input .. ch
-            ch = kbchar()
-        end
-        
-        return  -- Don't process other input while in dialog
-    end
+-- Buffer API Grouping
+State.buffer = {}
 
-    -- Find Next (F3)
-    if btnp_safe(K.F3) and not ctrl then
-        if Search.active and #Search.matches > 0 then
-            if shift then
-                Search.find_previous(buf)
-            else
-                Search.find_next(buf)
-            end
-        end
-        return
-    end
+function State.buffer.cur()
+    return State.get_current()
+end
 
-    -- Find (Ctrl+F)
-    if ctrl and btnp_safe(K.F) then
-        State.dialog_mode = "search"
-        State.dialog_input = ""
-        show_toast("🔍 Enter search query")
-        return
-    end
+function State.buffer.get_tabs()
+    return State.tabs
+end
 
-    -- Go to Line (Ctrl+G)
-    if ctrl and btnp_safe(K.G) then
-        State.dialog_mode = "goto"
-        State.dialog_input = ""
-        show_toast("⇒ Enter line number")
-        return
-    end
-
-    -- Save (Ctrl+S) - COMPREHENSIVE FIX
-    if ctrl and btnp_safe(K.S) then
-        debug_log("Save hotkey pressed")
-
-        local save_success = false
-        local error_msg = nil
-
-        -- Check if project API exists
-        if type(project) ~= "table" then
-            error_msg = "Project API not available"
-            debug_log(error_msg)
-        elseif type(project.write) ~= "function" then
-            error_msg = "project.write not available"
-            debug_log(error_msg)
-        else
-            -- Attempt save
-            local content = table.concat(buf.lines, "\n")
-            local path = buf.path or "main.lua"
-
-            debug_log("Attempting to save to: " .. path)
-            debug_log("Content length: " .. #content .. " bytes")
-
-            local ok, result = pcall(function()
-                return project.write(path, content)
-            end)
-
-            if ok then
-                if result then
-                    save_success = true
-                    buf.modified = false
-                    debug_log("Save successful")
-                else
-                    error_msg = "project.write returned false"
-                    debug_log(error_msg)
-                end
-            else
-                error_msg = "Save error: " .. tostring(result)
-                debug_log(error_msg)
-            end
-        end
-
-        -- Show feedback
-        if save_success then
-            show_toast("✓ Saved " .. (buf.path or "file"))
-        else
-            show_toast("✗ Save failed: " .. (error_msg or "unknown error"))
-        end
-
-        return
-    end
-
-    -- Run (Ctrl+R)
-    if ctrl and btnp_safe(K.R) then
-        debug_log("Run hotkey pressed")
-        if type(run_project) == "function" then
-            local ok = pcall(function() run_project(buf.path) end)
-            if ok then
-                show_toast("▶ Running " .. (buf.path or "file"))
-            else
-                show_toast("✗ Run failed")
-            end
-        else
-            show_toast("✗ Run not available")
-        end
-        return
-    end
-
-    -- Copy (Ctrl+C)
-    if ctrl and btnp_safe(K.C) then
-        local success, count = Clipboard.copy(buf)
-        if success then
-            State.clipboard = Clipboard.content  -- Sync for backwards compatibility
-            show_toast("📋 Copied " .. count .. " characters")
-        else
-            show_toast("No selection to copy")
-        end
-        return
-    end
-
-    -- Cut (Ctrl+X)
-    if ctrl and btnp_safe(K.X) then
-        buf.undo:push(State.get_snapshot(buf))
-        local success, count = Clipboard.cut(buf)
-        if success then
-            State.clipboard = Clipboard.content  -- Sync for backwards compatibility
-            show_toast("✂ Cut " .. count .. " characters")
-        else
-            show_toast("No selection to cut")
-        end
-        return
-    end
-
-    -- Paste (Ctrl+V)
-    if ctrl and btnp_safe(K.V) then
-        -- Sync clipboard from State for backwards compatibility
-        if State.clipboard and #State.clipboard > 0 then
-            Clipboard.content = State.clipboard
-        end
-        
-        if Clipboard.content and #Clipboard.content > 0 then
-            buf.undo:push(State.get_snapshot(buf))
-            local success = Clipboard.paste(buf, State.split_lines)
-            if success then
-                show_toast("📄 Pasted " .. #Clipboard.content .. " characters")
-            end
-        else
-            show_toast("Clipboard is empty")
-        end
-        return
-    end
-
-    -- Arrow keys with Home/End
-    if btnp_safe(K.LEFT) then
-        if buf.cx > 0 then buf.cx = buf.cx - 1
-        elseif buf.cy > 1 then buf.cy = buf.cy - 1; buf.cx = #(buf.lines[buf.cy] or "") end
-        buf.blink = 0
-    elseif btnp_safe(K.RIGHT) then
-        if buf.cx < #(buf.lines[buf.cy] or "") then buf.cx = buf.cx + 1
-        elseif buf.cy < #buf.lines then buf.cy = buf.cy + 1; buf.cx = 0 end
-        buf.blink = 0
-    elseif btnp_safe(K.UP) then
-        if buf.cy > 1 then buf.cy = buf.cy - 1; buf.cx = math.min(buf.cx, #(buf.lines[buf.cy] or "")) end
-        buf.blink = 0
-    elseif btnp_safe(K.DOWN) then
-        if buf.cy < #buf.lines then buf.cy = buf.cy + 1; buf.cx = math.min(buf.cx, #(buf.lines[buf.cy] or "")) end
-        buf.blink = 0
-    elseif btnp_safe(K.HOME) then
-        buf.cx = 0
-        buf.blink = 0
-    elseif btnp_safe(K.END) then
-        buf.cx = #(buf.lines[buf.cy] or "")
-        buf.blink = 0
-    end
-
-    -- Undo (Ctrl+Z)
-    if ctrl and btnp_safe(K.Z) then
-        local s = buf.undo:undo()
-        if s then
-            buf.lines = {}
-            for i, line in ipairs(s) do buf.lines[i] = line end
-            show_toast("↶ Undo")
-        end
-        return
-    end
-
-    -- Redo (Ctrl+Y)
-    if ctrl and btnp_safe(K.Y) then
-        local s = buf.undo:redo()
-        if s then
-            buf.lines = {}
-            for i, line in ipairs(s) do buf.lines[i] = line end
-            show_toast("↷ Redo")
-        end
-        return
-    end
-
-    -- Typing
-    local ch = kbchar()
-    while ch do
-        if not ctrl then
-            buf.undo:push(State.get_snapshot(buf))
-            local line = buf.lines[buf.cy] or ""
-            buf.lines[buf.cy] = string.sub(line,1,buf.cx) .. ch .. string.sub(line, buf.cx + 1)
-            buf.cx = buf.cx + 1
-            buf.modified = true
-            buf.blink = 0
-        end
-        ch = kbchar()
-    end
-
-    -- Backspace
-    if btnp_safe(K.BACK) then
-        buf.undo:push(State.get_snapshot(buf))
-        if buf.cx > 0 then
-            local line = buf.lines[buf.cy]
-            buf.lines[buf.cy] = string.sub(line,1,buf.cx-1)..string.sub(line,buf.cx+1)
-            buf.cx = buf.cx - 1
-        elseif buf.cy > 1 then
-            local line = buf.lines[buf.cy]
-            local prev = buf.lines[buf.cy-1]
-            buf.cx = #prev
-            buf.lines[buf.cy-1] = prev .. line
-            table.remove(buf.lines, buf.cy)
-            buf.cy = buf.cy - 1
-        end
-        buf.modified = true
-        buf.blink = 0
-    end
-
-    -- Delete
-    if btnp_safe(K.DEL) then
-        buf.undo:push(State.get_snapshot(buf))
-        local line = buf.lines[buf.cy] or ""
-        if buf.cx < #line then
-            buf.lines[buf.cy] = string.sub(line,1,buf.cx)..string.sub(line,buf.cx+2)
-        elseif buf.cy < #buf.lines then
-            buf.lines[buf.cy] = line .. (buf.lines[buf.cy + 1] or "")
-            table.remove(buf.lines, buf.cy + 1)
-        end
-        buf.modified = true
-        buf.blink = 0
-    end
-
-    -- Enter
-    if btnp_safe(K.ENTER) then
-        buf.undo:push(State.get_snapshot(buf))
-        local line = buf.lines[buf.cy] or ""
-        local pre = string.sub(line, 1, buf.cx)
-        local post = string.sub(line, buf.cx+1)
-        buf.lines[buf.cy] = pre
-        table.insert(buf.lines, buf.cy+1, post)
-        buf.cy = buf.cy + 1
-        buf.cx = 0
-        
-        -- Apply auto-indent if enabled
-        if Config.features.auto_indent then
-            Indent.apply_auto_indent(buf)
-        end
-        
-        buf.modified = true
-        buf.blink = 0
-    end
-
-    -- Tab
-    if btnp_safe(K.TAB) and not ctrl then
-        buf.undo:push(State.get_snapshot(buf))
-        local spaces = string.rep(" ", Config.tab_width or 2)
-        local line = buf.lines[buf.cy] or ""
-        buf.lines[buf.cy] = string.sub(line,1,buf.cx) .. spaces .. string.sub(line, buf.cx + 1)
-        buf.cx = buf.cx + #spaces
-        buf.modified = true
-        buf.blink = 0
+function State.buffer.set_current_tab(i)
+    if i >= 1 and i <= #State.tabs then
+        State.current_tab = i
+        debug_log("Switched to tab " .. i)
     end
 end
+
+function State.buffer.switch_tab_relative(delta)
+    local n = #State.tabs
+    if n == 0 then return end
+    State.current_tab = State.current_tab + delta
+    if State.current_tab > n then State.current_tab = 1 end
+    if State.current_tab < 1 then State.current_tab = n end
+end
+
+function State.buffer.open_tab(path, content)
+    return State.open_tab(path, content)
+end
+
+function State.buffer.close_tab(index)
+    if index and State.tabs[index] then
+        table.remove(State.tabs, index)
+        if State.current_tab >= index and State.current_tab > 1 then
+            State.current_tab = State.current_tab - 1
+        end
+    end
+end
+
+function State.buffer.increment_untitled()
+    State.untitled_counter = State.untitled_counter + 1
+end
+
+function State.buffer.get_untitled_counter()
+    return State.untitled_counter
+end
+
+-- Selection Wrappers
+function State.buffer.has_selection(buf)
+    return buf.sel_start_y ~= nil
+end
+
+function State.buffer.start_selection(buf)
+    if not buf.sel_start_y then
+        buf.sel_start_y = buf.cy
+        buf.sel_start_x = buf.cx
+        buf.sel_end_y = buf.cy
+        buf.sel_end_x = buf.cx
+        buf.mouse_selecting = true
+    end
+end
+
+function State.buffer.update_selection_end(buf)
+    if buf.sel_start_y then
+        buf.sel_end_y = buf.cy
+        buf.sel_end_x = buf.cx
+    end
+end
+
+function State.buffer.clear_selection(buf)
+    buf.sel_start_y = nil
+    buf.sel_start_x = nil
+    buf.sel_end_y = nil
+    buf.sel_end_x = nil
+    buf.mouse_selecting = false
+end
+
+function State.buffer.delete_selection(buf)
+    return State.delete_selection(buf)
+end
+
+-- State/Undo Wrappers
+function State.buffer.get_state()
+    local buf = State.get_current()
+    if not buf then return nil end
+    local s = {
+        lines = {},
+        cx = buf.cx, cy = buf.cy,
+        path = buf.path
+    }
+    for _,l in ipairs(buf.lines) do table.insert(s.lines, l) end
+    return s
+end
+
+function State.buffer.restore_state(s)
+    local buf = State.get_current()
+    if not buf or not s then return end
+    buf.lines = {}
+    for _,l in ipairs(s.lines) do table.insert(buf.lines, l) end
+    buf.cx = s.cx
+    buf.cy = s.cy
+    buf.modified = true
+end
+
+-- Expose Config
+State.config = Config
+
+-- Expose IO (Bridge to LuaTool globals)
+State.io = {
+    get_mouse = function() 
+        if type(mouse) == "function" then return mouse() end 
+        return nil 
+    end,
+    run = function(path)
+        if type(run_project) == "function" then 
+            run_project(path)
+        elseif type(run) == "function" then
+            run(path)
+        end
+    end,
+    save = function(path, content)
+        if type(project) == "table" and project.write then
+            return project.write(path, content)
+        end
+        return false
+    end,
+    toast = show_toast,
+    set_editor_font_size = function(sz)
+        local new_sz = math.max(6, math.min(64, sz))
+        Config.font_size = new_sz
+        if type(set_editor_font_size) == "function" then
+            local ok, m = pcall(set_editor_font_size, new_sz)
+            if ok and m then
+                Config.font_w = m.font_w or Config.font_w
+                Config.font_h = m.font_h or Config.font_h
+                Config.line_h = m.line_h or Config.line_h
+            end
+        end
+        show_toast("Font size: " .. Config.font_size)
+    end,
+    import_dialog = function()
+        -- Placeholder for file dialog
+        return nil
+    end
+}
 
 return State

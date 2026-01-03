@@ -5,46 +5,66 @@ local MouseHandler = {}
 MouseHandler.old_mouse_click = false
 MouseHandler.old_mouse_left = false
 
+-- Layout constants matching renderer.lua
+local function get_layout(win_h)
+    local header_height = Config.header_height or 56
+    local tab_bar_height = 40
+    local status_height = Config.help_h or 32
+    local scrollbar_height = 16
+    local gutter_width = 44
+    
+    local top_y = win_h - header_height
+    local tabs_bottom = top_y - tab_bar_height
+    local content_top = tabs_bottom
+    local content_bottom = status_height + scrollbar_height
+    
+    return {
+        header_height = header_height,
+        tab_bar_height = tab_bar_height,
+        status_height = status_height,
+        scrollbar_height = scrollbar_height,
+        gutter_width = gutter_width,
+        content_top = content_top,
+        content_bottom = content_bottom
+    }
+end
+
 -- Convert mouse position to editor line and column
 function MouseHandler.mouse_to_editor_pos(m, buf, win_x, win_y, win_w, win_h)
     if not buf then return 1, 0 end
 
-    local gutter_px = 44
-    local tab_bar_height = 30
-    local controls_height = Config.controls.height or 40
-    local help_height = Config.help_h or 60
+    local layout = get_layout(win_h)
+    local mouse_y = m.y
 
-    -- Convert mouse Y from bottom-left to top-left
-    local mouse_y_top_left = win_h - m.y
-
-    -- Content boundaries (top-left coordinates)
-    local content_top = help_height
-    local content_bottom = win_h - controls_height - tab_bar_height
-    local content_height = content_bottom - content_top
-
-    if mouse_y_top_left < content_top or mouse_y_top_left > content_bottom then
+    -- Check if mouse is in content area
+    if mouse_y > layout.content_top or mouse_y < layout.content_bottom then
         return buf.cy, buf.cx
     end
 
-    local dist_from_content_top = mouse_y_top_left - content_top
-    local visible_line_index = math.floor(dist_from_content_top / Config.line_h)
-    local line_idx = (buf.scroll_y or 0) + visible_line_index + 1
+    -- Distance from top of content area (growing downwards)
+    -- Subtract half line_h to center the click within the line
+    local line_h = Config.line_h or 20
+    local dist_from_content_top = layout.content_top - mouse_y - (line_h / 2)
+    local visible_line_index = math.floor(dist_from_content_top / line_h) + 1
+    local line_idx = (buf.scroll_y or 0) + visible_line_index
     line_idx = math.max(1, math.min(#buf.lines, line_idx))
 
-    -- Calculate column
-    local text_start_x = win_x + gutter_px
+    -- Calculate column using current font metrics
+    local text_start_x = win_x + layout.gutter_width
     local rel_x = m.x - text_start_x
     local line_text = buf.lines[line_idx] or ""
     local col = 0
+    local font_w = Config.font_w or 10
 
+    -- Use text_width for accurate measurement (handles spaces correctly)
     if text_width and rel_x > 0 then
         local best_col = 0
-        local best_diff = math.abs(rel_x)
+        local best_diff = rel_x  -- Start with max possible difference
         for i = 0, #line_text do
             local width_to_i = 0
             if i > 0 then
                 local substr = string.sub(line_text, 1, i)
-                width_to_i = text_width(substr) or (i * Config.font_w)
+                width_to_i = text_width(substr) or (i * font_w)
             end
             local diff = math.abs(rel_x - width_to_i)
             if diff < best_diff then
@@ -54,7 +74,7 @@ function MouseHandler.mouse_to_editor_pos(m, buf, win_x, win_y, win_w, win_h)
         end
         col = best_col
     elseif rel_x > 0 then
-        col = math.floor(rel_x / Config.font_w)
+        col = math.floor(rel_x / font_w)
     end
 
     col = math.max(0, math.min(#line_text, col))
@@ -72,16 +92,12 @@ function MouseHandler.handle_mouse(buf, win_x, win_y, win_w, win_h)
 
     if not m or not buf then return end
 
-    local mouse_y_top_left = win_h - m.y
-    local controls_height = Config.controls.height or 40
-    local tab_bar_height = 30
-    local help_height = Config.help_h or 60
-    local content_top = help_height
-    local content_bottom = win_h - controls_height - tab_bar_height
+    local layout = get_layout(win_h)
+    local mouse_y = m.y
 
     -- Handle mouse click to start selection
     if m.click and not MouseHandler.old_mouse_click then
-        if m.x > win_x + 44 and mouse_y_top_left >= content_top and mouse_y_top_left <= content_bottom then
+        if m.x > win_x + layout.gutter_width and mouse_y <= layout.content_top and mouse_y >= layout.content_bottom then
             local line_idx, col = MouseHandler.mouse_to_editor_pos(m, buf, win_x, win_y, win_w, win_h)
             buf.cy = line_idx
             buf.cx = col
@@ -98,22 +114,22 @@ function MouseHandler.handle_mouse(buf, win_x, win_y, win_w, win_h)
 
     -- Handle mouse drag for selection
     if m.left and MouseHandler.old_mouse_left and buf.mouse_selecting then
-        if m.x > win_x + 44 and mouse_y_top_left >= content_top and mouse_y_top_left <= content_bottom then
-            local line_idx, col = MouseHandler.mouse_to_editor_pos(m, buf, win_x, win_y, win_w, win_h)
-            buf.cy = line_idx
-            buf.cx = col
-            
-            -- Update selection end
-            buf.sel_end_x = col
-            buf.sel_end_y = line_idx
-        end
+        -- Clamp Y to content area
+        local clamp_y = math.max(layout.content_bottom, math.min(layout.content_top, mouse_y))
+        local temp_m = {x=m.x, y=clamp_y}
+        
+        local line_idx, col = MouseHandler.mouse_to_editor_pos(temp_m, buf, win_x, win_y, win_w, win_h)
+        buf.cy = line_idx
+        buf.cx = col
+        
+        -- Update selection end
+        buf.sel_end_x = col
+        buf.sel_end_y = line_idx
     end
 
     -- Handle mouse release to end selection
     if not m.left and MouseHandler.old_mouse_left and buf.mouse_selecting then
         buf.mouse_selecting = false
-        
-        -- Clear selection if start and end are the same
         if buf.sel_start_x == buf.sel_end_x and buf.sel_start_y == buf.sel_end_y then
             buf.sel_start_x = nil
             buf.sel_start_y = nil

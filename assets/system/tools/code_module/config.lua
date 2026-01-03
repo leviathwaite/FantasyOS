@@ -9,6 +9,27 @@ Config.help_h = 60
 Config.tab_width = 2
 Config.scroll_speed = 3
 Config.font_size = 20
+Config.header_height = 56
+
+-- Dynamic Metrics Initialization
+if type(editor_font_metrics) == "function" then
+    local ok, m = pcall(editor_font_metrics)
+    if ok and m then
+        Config.font_w = m.font_w or Config.font_w
+        Config.font_h = m.font_h or Config.font_h
+        Config.line_h = m.line_h or Config.line_h
+    end
+end
+    
+if type(set_editor_font_size) == "function" then
+    -- Enforce default size on startup
+    local ok, m = pcall(set_editor_font_size, Config.font_size)
+    if ok and m then
+        Config.font_w = m.font_w or Config.font_w
+        Config.font_h = m.font_h or Config.font_h
+        Config.line_h = m.line_h or Config.line_h
+    end
+end
 
 Config.colors = {
   bg = 0, text = 7, keyword = 12, func = 14, num = 9, str = 11,
