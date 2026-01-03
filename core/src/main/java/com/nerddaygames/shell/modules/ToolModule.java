@@ -11,6 +11,9 @@ import com.badlogic.gdx.graphics.Texture;
  */
 public interface ToolModule {
     String getName();
+    
+    // Returns the display title for the tab (e.g. "main.lua*")
+    default String getTitle() { return getName(); }
 
     // Optional: load/initialize the module (compile scripts, allocate resources)
     void load();

@@ -5,7 +5,13 @@ function _init()
 y=240
 end
 
-function _update() end
+function _update(
+
+
+
+) end
+
+
 function _draw() 
   print("Test",x,y)
 cls(2)

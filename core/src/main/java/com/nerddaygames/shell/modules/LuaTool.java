@@ -45,6 +45,7 @@ public class LuaTool implements ToolModule {
     private Project project;
     private ScriptEngine.SystemCallback systemCallback;
     private ToolInputProcessor inputProcessor;
+    private FileHandle projectDir;
 
     // Rendering
     private FrameBuffer fbo;
@@ -55,6 +56,130 @@ public class LuaTool implements ToolModule {
     private Texture generatedTexture;
     private int fboWidth = 1280;
     private int fboHeight = 720;
+
+    // State
+    private boolean initialized = false;
+    private LuaValue initChunk;
+    
+    // Toasts
+    private static class Toast {
+        String text; long expiresAtMs;
+        Toast(String t, long e) { text = t; expiresAtMs = e; }
+    }
+    private final List<Toast> toasts = new ArrayList<>();
+    
+    // Input state
+    private final Object keyLock = new Object();
+    private final Set<Integer> keysDown = new HashSet<>();
+    private final Set<Integer> keysPressed = new HashSet<>();
+    private final Queue<Character> charQueue = new ArrayDeque<>();
+    private final Map<Integer, Long> keyDownTime = new HashMap<>();
+    private final Map<Integer, Long> lastRepeatTime = new HashMap<>();
+    private float scrollDelta = 0f;
+    
+    // Configurable input area
+    private int inputBoundsX = 0;
+    private int inputBoundsTopY = 0;
+    private int inputBoundsW = 0;
+    private int inputBoundsH = 0;
+    private int inputGutterLeft = 0;
+    private int inputGutterTop = 0;
+    private int caretOffsetX = 0;
+
+    private static final long KEY_REPEAT_INITIAL_MS = 400;
+    private static final long KEY_REPEAT_INTERVAL_MS = 50;
+
+    public LuaTool(String name, String scriptPath) {
+        this.name = name;
+        this.scriptPath = scriptPath;
+        this.inputProcessor = new ToolInputProcessor();
+        
+        // Initialize graphics
+        batch = new SpriteBatch();
+        shapes = new ShapeRenderer();
+        font = new BitmapFont(false); // Flip Y=false (Standard Y-Up)
+        
+        // Initialize Lua
+        globals = JsePlatform.standardGlobals();
+        
+        // Setup package path to include assets folder (for require)
+        try {
+            LuaValue pkg = globals.get("package");
+            String currentPath = pkg.get("path").tojstring();
+            // Ensure we check current dir and assets subdir
+            String newPath = currentPath + ";?.lua;assets/?.lua;assets/system/tools/?.lua";
+            pkg.set("path", LuaValue.valueOf(newPath));
+        } catch (Exception e) {
+            System.err.println("Failed to setup package.path: " + e.getMessage());
+        }
+        
+        // Bindings
+        bindDrawingFunctions();
+        bindClipboard();
+        bindConsoleLog();
+        bindInputBindings();
+        bindKeyConstants();
+        bindRunFunction();
+        bindFontHelpers();
+        bindToastFunctions();
+    }
+    
+    @Override
+    public void load() {
+        if (initialized) return;
+        try {
+            FileHandle fh = Gdx.files.internal(scriptPath);
+            if (!fh.exists()) {
+                initError = "Script not found: " + scriptPath;
+                System.err.println("LuaTool: " + initError);
+                return;
+            }
+            String script = fh.readString(StandardCharsets.UTF_8.name());
+            initChunk = globals.load(script, scriptPath);
+            // Run the chunk to define functions (like _init, _draw, _update)
+            initChunk.call();
+            
+            // Bind project APIs BEFORE calling _init so project.read works
+            bindProjectAPIs();
+            System.out.println("[LuaTool] Bound project to LuaTool for projectDir=" + (projectDir != null ? projectDir.path() : "null"));
+            
+            // Call _init if present
+            LuaValue init = globals.get("_init");
+            if (init != null && !init.isnil()) init.call();
+            
+            initialized = true;
+            initError = null;
+            System.out.println("[LuaTool] Loaded and initialized " + name);
+        } catch (Exception e) {
+            initialized = false;
+            initError = e.getMessage(); // Capture primitive message
+            // Try to get LuaError details
+            if (e instanceof org.luaj.vm2.LuaError) {
+                initError = "Lua Error: " + e.getMessage();
+            }
+            e.printStackTrace();
+            System.err.println("[LuaTool] LOAD ERROR: " + initError);
+        }
+    }
+    
+    private void ensureFbo(int w, int h) {
+        if (fbo == null || fbo.getWidth() != w || fbo.getHeight() != h) {
+            if (fbo != null) fbo.dispose();
+            try {
+                fbo = new FrameBuffer(Pixmap.Format.RGBA8888, w, h, false);
+                // Important: FBO textures are Y-up by default logic in LibGDX
+                generatedTexture = fbo.getColorBufferTexture();
+                generatedTexture.setFilter(TextureFilter.Nearest, TextureFilter.Nearest);
+                this.fboWidth = w;
+                this.fboHeight = h;
+            } catch (Exception e) {
+                Gdx.app.error("LuaTool", "Failed to create FBO", e);
+            }
+        }
+    }
+
+    // Sprite cache
+    private final Map<String, Texture> spriteCache = new HashMap<>();
 
     // Draw queue
     private static abstract class DrawCmd {}
@@ -70,110 +195,13 @@ public class LuaTool implements ToolModule {
         final int colorIndex;
         CmdClear(int c){ this.colorIndex = c; }
     }
+    private static final class CmdSprite extends DrawCmd {
+        final String path; final float x, y, w, h;
+        CmdSprite(String p, float x, float y, float w, float h){ this.path=p; this.x=x; this.y=y; this.w=w; this.h=h; }
+    }
     private final List<DrawCmd> cmdQueue = new ArrayList<>();
 
-    // Toasts
-    private static final class Toast {
-        final String text;
-        final long expiresAtMs;
-        Toast(String t, long e){ text=t; expiresAtMs=e; }
-    }
-    private final List<Toast> toasts = new ArrayList<>();
-
-    // Compiled chunk (lazy init)
-    private LuaFunction initChunk = null;
-    private boolean initialized = false;
-
-    // Input state
-    private final Object keyLock = new Object();
-    private final Set<Integer> keysDown = new HashSet<>();
-    private final Set<Integer> keysPressed = new HashSet<>();
-    private final Queue<Character> charQueue = new ArrayDeque<>();
-    private volatile float scrollDelta = 0f;
-
-    // Key repeat
-    private final Map<Integer, Long> keyDownTime = new HashMap<>();
-    private final Map<Integer, Long> lastRepeatTime = new HashMap<>();
-    private long KEY_REPEAT_INITIAL_MS = 400L;
-    private long KEY_REPEAT_INTERVAL_MS = 60L;
-
-    // Input mapping bounds and gutter
-    private int inputBoundsX = 0, inputBoundsTopY = 0, inputBoundsW = 0, inputBoundsH = 0;
-    private int inputGutterLeft = 0;
-    private int inputGutterTop = 0;
-    private int caretOffsetX = 0;
-
-    public LuaTool(String name, String scriptPath) {
-        this.name = name;
-        this.scriptPath = scriptPath;
-        this.globals = JsePlatform.standardGlobals();
-        this.batch = new SpriteBatch();
-        this.shapes = new ShapeRenderer();
-        this.font = new BitmapFont();
-        this.inputProcessor = new ToolInputProcessor();
-
-        System.out.println("[LuaTool] Constructor called for: " + name);
-    }
-
-    @Override public String getName() { return name; }
-
-    @Override
-    public void load() {
-        System.out.println("[LuaTool] load() called for: " + name + " with script: " + scriptPath);
-
-        try {
-            FileHandle handle = Gdx.files.internal(scriptPath);
-            if (handle != null && handle.exists()) {
-                System.out.println("[LuaTool] Script file found: " + scriptPath);
-                String script = handle.readString(StandardCharsets.UTF_8.name());
-                System.out.println("[LuaTool] Script loaded, length: " + script.length() + " chars");
-
-                LuaValue chunk = globals.load(script, scriptPath);
-                initChunk = chunk.checkfunction();
-
-                Gdx.app.log("LuaTool", "Compiled (no-exec) script: " + scriptPath);
-                System.out.println("[LuaTool] Script compiled successfully");
-            } else {
-                Gdx.app.log("LuaTool", "Script not found: " + scriptPath);
-                System.err.println("[LuaTool] ERROR: Script file not found: " + scriptPath);
-            }
-        } catch (Exception e) {
-            Gdx.app.error("LuaTool", "Failed to compile script: " + scriptPath + " : " + e.getMessage(), e);
-            System.err.println("[LuaTool] EXCEPTION during load: " + e.getMessage());
-            e.printStackTrace();
-        }
-
-        System.out.println("[LuaTool] Binding Lua functions...");
-        bindDrawingFunctions();
-        bindConsoleLog();
-        bindInputBindings();
-        bindKeyConstants();
-        bindRunFunction();
-        bindFontHelpers();
-        bindToastFunctions();
-
-        globals.set("set_gutter_left", new OneArgFunction() {
-            @Override public LuaValue call(LuaValue px) {
-                try { setInputGutterLeft(px.checkint()); } catch (Exception ignored) {}
-                return LuaValue.NIL;
-            }
-        });
-
-        globals.set("caret_offset_x", LuaValue.valueOf(caretOffsetX));
-
-        System.out.println("[LuaTool] load() complete for: " + name);
-    }
-
-    private void ensureFbo(int w, int h) {
-        if (w <= 0 || h <= 0) return;
-        if (fbo != null && w == fboWidth && h == fboHeight) return;
-        try { if (fbo != null) fbo.dispose(); } catch (Exception ignored) {}
-        fboWidth = w; fboHeight = h;
-        fbo = new FrameBuffer(Pixmap.Format.RGBA8888, fboWidth, fboHeight, false);
-        generatedTexture = fbo.getColorBufferTexture();
-        generatedTexture.setFilter(TextureFilter.Nearest, TextureFilter.Nearest);
-        Gdx.app.log("LuaTool", "Created FBO " + fboWidth + "x" + fboHeight + " for " + name);
-    }
+    // ... Toasts and input fields ...
 
     private void bindDrawingFunctions() {
         globals.set("print", new VarArgFunction() {
@@ -203,6 +231,20 @@ public class LuaTool implements ToolModule {
             }
         });
 
+        globals.set("spr", new VarArgFunction() {
+            @Override public Varargs invoke(Varargs args) {
+                try {
+                    String path = args.checkjstring(1);
+                    double x = args.optdouble(2, 0.0);
+                    double y = args.optdouble(3, 0.0);
+                    double w = args.isnil(4) ? -1 : args.todouble(4); // -1 means use texture width
+                    double h = args.isnil(5) ? -1 : args.todouble(5);
+                    synchronized (cmdQueue) { cmdQueue.add(new CmdSprite(path, (float)x, (float)y, (float)w, (float)h)); }
+                } catch (Exception ignored) {}
+                return LuaValue.NIL;
+            }
+        });
+
         globals.set("cls", new OneArgFunction() {
             @Override public LuaValue call(LuaValue arg) {
                 int color = arg.isnil() ? 0 : arg.toint();
@@ -210,7 +252,7 @@ public class LuaTool implements ToolModule {
                 return LuaValue.NIL;
             }
         });
-
+        
         globals.set("mouse", new ZeroArgFunction() {
             @Override public LuaValue call() {
                 org.luaj.vm2.LuaTable t = new org.luaj.vm2.LuaTable();
@@ -225,7 +267,7 @@ public class LuaTool implements ToolModule {
 
                 if (areaW <= 0 || areaH <= 0) {
                     t.set("x", LuaValue.valueOf(sx));
-                    t.set("y", LuaValue.valueOf(Gdx.graphics.getHeight() - sy_top));
+                    t.set("y", LuaValue.valueOf(sy_top));
                 } else {
                     float localX = sx - areaX - gutter;
                     float localYFromTop = sy_top - areaTopY - gutterTop;
@@ -233,9 +275,13 @@ public class LuaTool implements ToolModule {
                     if (localX > areaW) localX = areaW;
                     if (localYFromTop < 0) localYFromTop = 0;
                     if (localYFromTop > areaH) localYFromTop = areaH;
-                    float localYFromBottom = areaH - localYFromTop;
+                    
                     float tx = (areaW > 0) ? (localX * ((float) fboWidth / (float) areaW)) : localX;
-                    float ty = (areaH > 0) ? (localYFromBottom * ((float) fboHeight / (float) areaH)) : localYFromBottom;
+                    // Invert Y for Lua (Y-Up), so 0 is bottom, Height is top.
+                    // localYFromTop is 0 at Top.
+                    float scaledYFromTop = (areaH > 0) ? (localYFromTop * ((float) fboHeight / (float) areaH)) : localYFromTop;
+                    float ty = fboHeight - scaledYFromTop;
+                    
                     t.set("x", LuaValue.valueOf(Math.round(tx)));
                     t.set("y", LuaValue.valueOf(Math.round(ty)));
                 }
@@ -248,6 +294,27 @@ public class LuaTool implements ToolModule {
                 t.set("scroll", LuaValue.valueOf((int) scrollDelta));
                 scrollDelta = 0f;
                 return t;
+            }
+        });
+    }
+
+    private void bindClipboard() {
+        globals.set("clipboard", org.luaj.vm2.LuaTable.tableOf());
+        globals.get("clipboard").set("set", new OneArgFunction() {
+            @Override public LuaValue call(LuaValue content) {
+                try {
+                    String s = content.checkjstring();
+                    Gdx.app.getClipboard().setContents(s);
+                    return LuaValue.TRUE;
+                } catch (Exception e) { return LuaValue.FALSE; }
+            }
+        });
+        globals.get("clipboard").set("get", new ZeroArgFunction() {
+            @Override public LuaValue call() {
+                try {
+                    String s = Gdx.app.getClipboard().getContents();
+                    return (s == null) ? LuaValue.NIL : LuaValue.valueOf(s);
+                } catch (Exception e) { return LuaValue.NIL; }
             }
         });
     }
@@ -384,6 +451,35 @@ public class LuaTool implements ToolModule {
                 return LuaValue.valueOf(Math.round(h));
             }
         });
+        
+        // Font Scaling (Legacy support)
+        globals.set("set_editor_font_size", new OneArgFunction() {
+            @Override public LuaValue call(LuaValue size) {
+                float px = (float) size.optdouble(16.0);
+                float base = 16.0f; // Approx default BitmapFont size
+                float scale = Math.max(0.5f, Math.min(4.0f, px / base));
+                font.getData().setScale(scale);
+                
+                // Return metrics
+                org.luaj.vm2.LuaTable t = new org.luaj.vm2.LuaTable();
+                glyph.setText(font, "M");
+                t.set("font_w", LuaValue.valueOf(glyph.width));
+                t.set("font_h", LuaValue.valueOf(font.getLineHeight()));
+                t.set("line_h", LuaValue.valueOf(font.getLineHeight() + 4));
+                return t;
+            }
+        });
+
+        globals.set("editor_font_metrics", new ZeroArgFunction() {
+            @Override public LuaValue call() {
+                org.luaj.vm2.LuaTable t = new org.luaj.vm2.LuaTable();
+                glyph.setText(font, "M");
+                t.set("font_w", LuaValue.valueOf(glyph.width));
+                t.set("font_h", LuaValue.valueOf(font.getLineHeight()));
+                t.set("line_h", LuaValue.valueOf(font.getLineHeight() + 4));
+                return t;
+            }
+        });
     }
 
     private void bindToastFunctions() {
@@ -399,6 +495,15 @@ public class LuaTool implements ToolModule {
                 return LuaValue.NIL;
             }
         });
+        
+        // Import stub
+        globals.set("import_file_dialog", new ZeroArgFunction() {
+             @Override public LuaValue call() {
+                 // Return nil for now, or implement via SystemCallback if we had a file picker
+                 enqueueToast("Import not implemented", 1.0f);
+                 return LuaValue.NIL;
+             }
+        });
     }
 
     private void enqueueToast(String message, float seconds) {
@@ -410,8 +515,13 @@ public class LuaTool implements ToolModule {
     @Override
     public void loadProject(Project proj) {
         this.project = proj;
-        final FileHandle projectDir = (proj != null) ? proj.getDir() : null;
-
+        if (proj != null) {
+            this.projectDir = proj.getDir();
+        }
+        bindProjectAPIs();
+    }
+    
+    private void bindProjectAPIs() {
         globals.set("project", org.luaj.vm2.LuaTable.tableOf());
 
         globals.get("project").set("read", new OneArgFunction() {
@@ -434,14 +544,23 @@ public class LuaTool implements ToolModule {
                 try {
                     String path = pathLv.checkjstring();
                     String content = contentLv.isnil() ? "" : contentLv.checkjstring();
-                    if (projectDir == null) return LuaValue.FALSE;
+                    if (projectDir == null) {
+                        System.err.println("[LuaTool] project.write FAILED: projectDir is null!");
+                        return LuaValue.FALSE;
+                    }
                     FileHandle fh = projectDir.child(path);
+                    System.out.println("[LuaTool] project.write: Saving to " + fh.path());
                     FileHandle parent = fh.parent();
                     if (parent != null && !parent.exists()) parent.mkdirs();
                     fh.writeString(content, false, "UTF-8");
+                    System.out.println("[LuaTool] project.write: SUCCESS - wrote " + content.length() + " chars to " + fh.path());
                     enqueueToast("Saved " + path, 1.2f);
                     return LuaValue.TRUE;
-                } catch (Exception e) { Gdx.app.error("LuaTool", "project.write error: " + e.getMessage(), e); return LuaValue.FALSE; }
+                } catch (Exception e) { 
+                    System.err.println("[LuaTool] project.write ERROR: " + e.getMessage());
+                    Gdx.app.error("LuaTool", "project.write error: " + e.getMessage(), e); 
+                    return LuaValue.FALSE; 
+                }
             }
         });
 
@@ -533,9 +652,20 @@ public class LuaTool implements ToolModule {
                 if (initChunk != null) {
                     System.out.println("[LuaTool] Executing initChunk...");
                     initChunk.call();
+                    
+                    // Call _init if defined
+                    try {
+                        LuaValue initFunc = globals.get("_init");
+                        if (initFunc != null && !initFunc.isnil()) {
+                            initFunc.call();
+                            System.out.println("[LuaTool] _init() called");
+                        }
+                    } catch (Exception e) {
+                        System.err.println("[LuaTool] Error calling _init: " + e.getMessage());
+                    }
+
                     initialized = true;
                     Gdx.app.log("LuaTool", "Initialized tool onFocus: " + scriptPath);
-                    System.out.println("[LuaTool] initChunk executed successfully");
                 } else {
                     System.err.println("[LuaTool] ERROR: initChunk is null!");
                 }
@@ -561,6 +691,16 @@ public class LuaTool implements ToolModule {
     }
 
     @Override public void setSystemCallback(ScriptEngine.SystemCallback cb) { this.systemCallback = cb; }
+    
+    public void setProjectDir(FileHandle dir) { 
+        this.projectDir = dir;
+        System.out.println("[LuaTool] setProjectDir: " + (dir != null ? dir.path() : "null"));
+        // Only rebind if globals exists (i.e., after load() was called)
+        if (globals != null) {
+            bindProjectAPIs();
+        }
+    }
+    
     @Override public InputProcessor getInputProcessor() { return inputProcessor; }
     @Override public Texture getTexture() { return generatedTexture; }
 
@@ -604,10 +744,24 @@ public class LuaTool implements ToolModule {
         }
     }
 
+    private String initError = null;
+
     @Override
     public void render() {
         if (!initialized) {
-            System.out.println("[LuaTool] render() - NOT INITIALIZED");
+            // Render error if present
+            if (initError != null) {
+                if (batch != null && font != null) {
+                    batch.begin();
+                    font.setColor(Color.RED);
+                    font.draw(batch, "Lua Init Error:\n" + initError, 10, Gdx.graphics.getHeight() - 20);
+                    batch.end();
+                } else {
+                    System.err.println("[LuaTool] render() - NOT INITIALIZED (Error: " + initError + ")");
+                }
+            } else {
+                System.out.println("[LuaTool] render() - NOT INITIALIZED");
+            }
             return;
         }
 
@@ -616,8 +770,6 @@ public class LuaTool implements ToolModule {
             LuaValue f = globals.get("_draw");
             if (f != null && !f.isnil()) {
                 f.call();
-            } else {
-                System.err.println("[LuaTool] render() - _draw is null or nil!");
             }
         } catch (Exception e) {
             System.err.println("[LuaTool] render() - Exception in _draw(): " + e.getMessage());
@@ -626,15 +778,14 @@ public class LuaTool implements ToolModule {
 
         // Ensure FBO exists
         if (fbo == null) {
-            System.out.println("[LuaTool] render() - FBO is null, creating...");
             ensureFbo(fboWidth, fboHeight);
         }
 
         // Render to FBO
         fbo.begin();
 
-        // DEBUGGING: Red clear color to verify FBO works
-        Gdx.gl.glClearColor(1f, 0f, 0f, 1f);
+        // Default clear color (Black)
+        Gdx.gl.glClearColor(0f, 0f, 0f, 1f);
         Gdx.gl.glClear(Gdx.gl.GL_COLOR_BUFFER_BIT);
 
         // Draw shapes
@@ -651,7 +802,7 @@ public class LuaTool implements ToolModule {
         }
         shapes.end();
 
-        // Draw text
+        // Draw text and sprites
         batch.begin();
         synchronized (cmdQueue) {
             for (DrawCmd c : cmdQueue) {
@@ -660,6 +811,25 @@ public class LuaTool implements ToolModule {
                     Color col = paletteColor(t.colorIndex);
                     font.setColor(col);
                     font.draw(batch, t.text, t.x, t.y);
+                } else if (c instanceof CmdSprite) {
+                    CmdSprite s = (CmdSprite) c;
+                    Texture tex = spriteCache.get(s.path);
+                    if (tex == null) {
+                        try {
+                            FileHandle fh = Gdx.files.internal(s.path);
+                            if (fh.exists()) {
+                                tex = new Texture(fh);
+                                tex.setFilter(TextureFilter.Linear, TextureFilter.Linear);
+                                spriteCache.put(s.path, tex);
+                            }
+                        } catch (Exception e) { /* Ignore load fail */ }
+                    }
+                    if (tex != null) {
+                        float w = (s.w < 0) ? tex.getWidth() : s.w;
+                        float h = (s.h < 0) ? tex.getHeight() : s.h;
+                        // Draw with Y-Up logic for FBO
+                        batch.draw(tex, s.x, s.y, w, h, 0, 0, 1, 1);
+                    }
                 }
             }
             cmdQueue.clear();
@@ -668,19 +838,56 @@ public class LuaTool implements ToolModule {
         // Draw toasts
         synchronized (toasts) {
             long now = System.currentTimeMillis();
-            float y = fboHeight - 20f;
+            // Position: Centered X, 1/3 up from bottom Y
+            float startY = fboHeight / 3f; 
+            float y = startY;
+            
             List<Toast> remove = new ArrayList<>();
             for (Toast t : toasts) {
                 if (t.expiresAtMs <= now) { remove.add(t); continue; }
+                
+                glyph.setText(font, t.text);
+                float tw = glyph.width;
+                float th = font.getLineHeight();
+                float x = (fboWidth - tw) / 2f;
+                
+                // Draw background box
+                batch.end();
+                Gdx.gl.glEnable(Gdx.gl.GL_BLEND);
+                Gdx.gl.glBlendFunc(Gdx.gl.GL_SRC_ALPHA, Gdx.gl.GL_ONE_MINUS_SRC_ALPHA);
+                shapes.begin(ShapeRenderer.ShapeType.Filled);
+                shapes.setColor(0f, 0f, 0f, 0.7f);
+                float padding = 8f;
+                shapes.rect(x - padding, y - th - padding, tw + padding*2, th + padding*2);
+                shapes.end();
+                Gdx.gl.glDisable(Gdx.gl.GL_BLEND); // Batch begin might reset this but good practice
+                batch.begin();
+                
                 font.setColor(Color.WHITE);
-                font.draw(batch, t.text, 8, y);
-                y -= (font.getLineHeight() + 4);
+                font.draw(batch, t.text, x, y);
+                y -= (th + 20f);
             }
             toasts.removeAll(remove);
         }
         batch.end();
 
         fbo.end();
+    }
+
+    @Override
+    public String getName() {
+        return name;
+    }
+
+    @Override
+    public String getTitle() {
+        if (globals != null) {
+            try {
+                LuaValue v = globals.get("_TITLE");
+                if (v != null && !v.isnil()) return v.tojstring();
+            } catch (Exception ignored) {}
+        }
+        return name;
     }
 
     @Override

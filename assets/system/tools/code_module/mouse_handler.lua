@@ -5,22 +5,16 @@ local MouseHandler = {}
 MouseHandler.old_mouse_click = false
 MouseHandler.old_mouse_left = false
 
--- Layout constants matching renderer.lua
+-- Layout constants matching renderer.lua (module-relative)
 local function get_layout(win_h)
-    local header_height = Config.header_height or 56
-    local tab_bar_height = 40
     local status_height = Config.help_h or 32
     local scrollbar_height = 16
     local gutter_width = 44
-    
-    local top_y = win_h - header_height
-    local tabs_bottom = top_y - tab_bar_height
-    local content_top = tabs_bottom
+
+    local content_top = win_h
     local content_bottom = status_height + scrollbar_height
-    
+
     return {
-        header_height = header_height,
-        tab_bar_height = tab_bar_height,
         status_height = status_height,
         scrollbar_height = scrollbar_height,
         gutter_width = gutter_width,
@@ -95,15 +89,20 @@ function MouseHandler.handle_mouse(buf, win_x, win_y, win_w, win_h)
     local layout = get_layout(win_h)
     local mouse_y = m.y
 
+    -- Translate global mouse Y to module-local Y (if necessary)
+    -- In our environment mouse() returns global coords; win_y is the module Y offset.
+    local local_m = { x = m.x - win_x, y = m.y - win_y, click = m.click, left = m.left }
+
     -- Handle mouse click to start selection
     if m.click and not MouseHandler.old_mouse_click then
-        if m.x > win_x + layout.gutter_width and mouse_y <= layout.content_top and mouse_y >= layout.content_bottom then
+        -- Only handle clicks inside content text area (exclude gutter and status bar)
+        if m.x > win_x + layout.gutter_width and m.y <= layout.content_top and m.y >= layout.content_bottom then
             local line_idx, col = MouseHandler.mouse_to_editor_pos(m, buf, win_x, win_y, win_w, win_h)
             buf.cy = line_idx
             buf.cx = col
             buf.blink = 0
             buf.mouse_selecting = true
-            
+
             -- Start selection
             buf.sel_start_x = col
             buf.sel_start_y = line_idx
@@ -115,13 +114,13 @@ function MouseHandler.handle_mouse(buf, win_x, win_y, win_w, win_h)
     -- Handle mouse drag for selection
     if m.left and MouseHandler.old_mouse_left and buf.mouse_selecting then
         -- Clamp Y to content area
-        local clamp_y = math.max(layout.content_bottom, math.min(layout.content_top, mouse_y))
+        local clamp_y = math.max(win_y + layout.content_bottom, math.min(win_y + layout.content_top, m.y))
         local temp_m = {x=m.x, y=clamp_y}
-        
+
         local line_idx, col = MouseHandler.mouse_to_editor_pos(temp_m, buf, win_x, win_y, win_w, win_h)
         buf.cy = line_idx
         buf.cx = col
-        
+
         -- Update selection end
         buf.sel_end_x = col
         buf.sel_end_y = line_idx

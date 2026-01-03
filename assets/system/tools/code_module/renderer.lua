@@ -27,28 +27,27 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
     end
 
     -- Layout calculations
-    local header_height = Config.header_height or 56
-    local tab_bar_height = 40
+    -- NOTE: EditorScreen now provides the global toolbar at the top; the module should
+    -- render into the area passed to it (win_y, win_h) without reserving extra header space.
+    local header_height = 0 -- previously Config.header_height (handled by EditorScreen)
+    local tab_bar_height = 0 -- module no longer draws its own tab bar; tabs are drawn by EditorScreen
     local status_height = Config.help_h or 32
     local scrollbar_height = 16
     local gutter_width = 44
 
-    -- Vertical Layout (Top to Bottom):
-    -- 1. Global Header (External, 56px) - We skip this space
-    -- 2. Tab Bar + Toolbar (Height 40)
-    -- 3. Content
-    -- 4. Scrollbar
-    -- 5. Status Bar
+    -- Vertical Layout (Top to Bottom within the provided win_* area):
+    -- 1. Content (fills the full area passed in)
+    -- 2. Scrollbar
+    -- 3. Status Bar
 
-    -- Screen Y (0 at Bottom, H at Top)
-    local top_y = win_y + win_h - header_height
-    local tab_bar_y = top_y - tab_bar_height
+    -- Screen Y (0 at Bottom, H at Top) for the module's area
+    local top_y = win_y + win_h
     local status_y = win_y
     local scrollbar_y = status_y + status_height
-    
-    local content_top_y = tab_bar_y
+
+    local content_top_y = top_y
     local content_bottom_y = scrollbar_y
-    
+
     local content_height = content_top_y - content_bottom_y
     local visible_lines = math.floor(content_height / Config.line_h)
     local visible_width = win_w - gutter_width
@@ -59,61 +58,15 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
         Scroll.ensure_cursor_visible_horizontal(buf, visible_width)
     end
 
-    -- 1. Draw Tab Bar Background (merged with toolbar)
-    if rect then
-        rect(win_x, tab_bar_y, win_w, tab_bar_height, Config.colors.gutter_bg)
-        -- Separator
-        rect(win_x, tab_bar_y, win_w, 1, Config.colors.gutter_fg)
-    end
-    
-    -- Draw Tabs (Left Aligned)
-    local tx = win_x + 10
-    for i, t in ipairs(State.tabs) do
-        local is_current = (i == State.current_tab)
-        local col = is_current and Config.colors.help_example or Config.colors.help_text
-        local label = t.path or ("tab"..i)
-        if t.modified then label = label .. "*" end
-
-        if print then
-            print(label, tx, tab_bar_y + 12, col)
-        end
-        
-        if is_current and rect then
-            rect(tx, tab_bar_y + 4, (#label * 8), 2, Config.colors.cursor)
-        end
-
-        tx = tx + (#label * 8) + 16
-    end
-    
-    -- New Tab Button (+)
-    if print then
-        print("+", tx, tab_bar_y + 12, Config.colors.help_example)
-    end
-
-    -- Draw Save/Run Icons (Right Aligned in Tab Bar)
-     if spr then
-        local icon_size = 24
-        local icon_y = tab_bar_y + (tab_bar_height - icon_size)/2
-        local right_margin = 10
-        
-        -- Run Button
-        spr("icons/icon_play.png", win_x + win_w - icon_size - right_margin, icon_y, icon_size, icon_size)
-        -- Save Button
-        spr("icons/icon_save.png", win_x + win_w - (icon_size * 2) - (right_margin * 2), icon_y, icon_size, icon_size)
-    elseif print then
-        print("[Run]", win_x + win_w - 60, tab_bar_y + 12, Config.colors.help_text)
-        print("[Save]", win_x + win_w - 120, tab_bar_y + 12, Config.colors.help_text)
-    end
-
-    -- 3. Draw Content Area Background
+    -- Draw Content Area Background
     if rect then
         rect(win_x, content_bottom_y, win_w, content_height, Config.colors.bg)
     end
 
-    -- 4. Draw Horizontal Scrollbar
+    -- Draw Horizontal Scrollbar
     if Config.features.horizontal_scroll and rect then
         rect(win_x, scrollbar_y, win_w, scrollbar_height, Config.colors.gutter_bg)
-        
+
         -- Calculate Max Width
         local max_width = visible_width
         for _, l in ipairs(buf.lines) do
@@ -122,7 +75,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
              if w > max_width then max_width = w end
         end
         max_width = max_width + 100 -- Padding
-        
+
         -- Draw Thumb
         local view_ratio = math.min(1, visible_width / max_width)
         local thumb_w = math.max(20, win_w * view_ratio)
@@ -130,11 +83,11 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
         scroll_ratio = math.max(0, math.min(1, scroll_ratio))
         local max_thumb_x = win_w - thumb_w
         local thumb_x = win_x + (max_thumb_x * scroll_ratio)
-        
+
         rect(thumb_x, scrollbar_y + 2, thumb_w, scrollbar_height - 4, Config.colors.gutter_fg)
     end
-    
-    -- 5. Draw Status Bar (Bottom)
+
+    -- Draw Status Bar (Bottom)
     if rect then
         rect(win_x, status_y, win_w, status_height, Config.colors.help_bg)
     end
@@ -144,7 +97,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
         print("Ctrl+S: Save  Ctrl+R: Run", win_x + win_w - 250, status_y + 8, Config.colors.help_text)
     end
 
-    -- 4. Draw Content Area
+    -- Draw Content Area (again, to ensure layering)
     local content_render_y_bottom = status_y + status_height
     if rect then
         rect(win_x, content_render_y_bottom, win_w, content_height, Config.colors.bg)
@@ -161,7 +114,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
         local line_top_y = content_top_y - (i * Config.line_h)
         local text_draw_y = line_top_y - 12
         local line_rect_y = line_top_y - Config.line_h
-        
+
         -- Draw gutter background
         if rect then
             rect(win_x, line_rect_y, gutter_width, Config.line_h, Config.colors.gutter_bg)
@@ -178,13 +131,13 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
             local sel_end_y = math.max(buf.sel_start_y, buf.sel_end_y)
             local sel_start_x = (buf.sel_start_y < buf.sel_end_y or (buf.sel_start_y == buf.sel_end_y and buf.sel_start_x <= buf.sel_end_x)) and buf.sel_start_x or buf.sel_end_x
             local sel_end_x = (buf.sel_start_y < buf.sel_end_y or (buf.sel_start_y == buf.sel_end_y and buf.sel_start_x <= buf.sel_end_x)) and buf.sel_end_x or buf.sel_start_x
-            
+
             if line_idx >= sel_start_y and line_idx <= sel_end_y then
                 local line_text = buf.lines[line_idx] or ""
                 local text_x = win_x + gutter_width
                 local highlight_start_x = text_x
                 local highlight_width = 0
-                
+
                 if line_idx == sel_start_y and line_idx == sel_end_y then
                     -- Selection on single line
                     if text_width then
@@ -222,7 +175,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
                         highlight_width = #line_text * Config.font_w
                     end
                 end
-                
+
                 -- Draw selection highlight
                 if rect and highlight_width > 0 then
                     rect(highlight_start_x, line_rect_y, highlight_width, Config.line_h, Config.colors.selection)
@@ -233,7 +186,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
         -- Draw text line with syntax highlighting
         local line_text = buf.lines[line_idx] or ""
         local text_x = win_x + gutter_width
-        
+
         -- Apply horizontal scroll offset
         local scroll_offset = 0
         if Config.features.horizontal_scroll and buf.scroll_x then
@@ -244,7 +197,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
             -- Parse tokens for syntax highlighting
             local tokens = Syntax:parse(line_text)
             local current_x = text_x - scroll_offset
-            
+
             for _, token in ipairs(tokens) do
                 -- Only render tokens that are visible
                 local token_width = 0
@@ -253,11 +206,11 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
                 else
                     token_width = #token.text * Config.font_w
                 end
-                
+
                 if current_x + token_width >= text_x and current_x < text_x + visible_width then
                     print(token.text, current_x, text_draw_y, token.color)
                 end
-                
+
                 current_x = current_x + token_width
             end
         end
@@ -282,7 +235,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
             end
         end
     end
-    
+
      -- Draw dialog overlay
     if State.dialog_mode then
         local overlay_h = 80
@@ -290,11 +243,11 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
         local overlay_w = 400
 
         local overlay_x = win_x + (win_w - overlay_w) / 2
-        
+
         if rect then
             rect(overlay_x, overlay_y, overlay_w, overlay_h, Config.colors.gutter_bg)
         end
-        
+
         if print then
             local label_y = overlay_y + overlay_h - 25 -- Top of box
             if State.dialog_mode == "goto" then
@@ -302,7 +255,7 @@ function Renderer.draw(State, win_x, win_y, win_w, win_h)
             elseif State.dialog_mode == "search" then
                 print("Find:", overlay_x + 10, label_y, Config.colors.help_title)
             end
-            
+
             local input_y = label_y - 25
             local input_text = State.dialog_input .. "_"
             print(input_text, overlay_x + 10, input_y, Config.colors.help_example)
