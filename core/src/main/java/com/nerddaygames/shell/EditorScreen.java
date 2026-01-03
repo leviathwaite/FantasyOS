@@ -33,7 +33,13 @@ public class EditorScreen extends ScreenAdapter {
     private Map<String, Rectangle> tabs = new LinkedHashMap<>();
     private ToolModule currentModule;
     private final int TOOLBAR_HEIGHT = 56;
-    private final int TAB_SIZE = 48;
+    private final int TAB_BAR_HEIGHT = 40; // New tab bar under toolbar
+    private final int TAB_HEIGHT = 28;
+    private final int TAB_PADDING = 12;
+    private final int TAB_MIN_WIDTH = 80;
+    private final int TAB_GAP = 8;
+    private final int TAB_ICON_SIZE = 48;
+    private final int TAB_ICON_MARGIN = 10;
 
     public EditorScreen(Main game, FileHandle projectDir) {
         this.game = game;
@@ -45,25 +51,26 @@ public class EditorScreen extends ScreenAdapter {
         ((OrthographicCamera)uiViewport.getCamera()).setToOrtho(true);
 
         // Catch Android back button to prevent app exit
-        // Catch Android back button to prevent app exit
         Gdx.input.setCatchKey(Input.Keys.BACK, true);
 
-        // createModule("Code", "icons/icon_code_editor.png", "system/tools/code_module/code.lua"); // Example path usage
         createModule("Code", "icons/icon_code_editor.png", "system/tools/code_module/code.lua");
         switchModule("Code");
+
+        // initial layout of tabs
+        layoutTabs(Gdx.graphics.getWidth());
     }
 
     private void createModule(String name, String iconPath, String scriptPath) {
         LuaTool tool = new LuaTool(name, scriptPath);
-        
+
         // CRITICAL: Set project directory BEFORE load() so _init can read files
         tool.setProjectDir(projectDir);
-        
+
         // Now load and initialize the script
         tool.load();
-        
-        // Fix Input Offset: Toolbar is 56px tall
-        tool.setInputBounds(0, TOOLBAR_HEIGHT, Gdx.graphics.getWidth(), Gdx.graphics.getHeight() - TOOLBAR_HEIGHT);
+
+        // Fix Input Offset: Toolbar + Tab bar heights
+        tool.setInputBounds(0, TOOLBAR_HEIGHT + TAB_BAR_HEIGHT, Gdx.graphics.getWidth(), Gdx.graphics.getHeight() - TOOLBAR_HEIGHT - TAB_BAR_HEIGHT);
         tool.setInputGutterTop(0); // If needed
 
         // Handle Run Command
@@ -73,7 +80,7 @@ public class EditorScreen extends ScreenAdapter {
                 if ("run".equals(cmd)) {
                     // Save all?
                     for(ToolModule m : modules.values()) m.onBlur(); // Force save if implemented
-                    
+
                     Gdx.app.postRunnable(() -> {
                         game.setScreen(new RunScreen(game, projectDir));
                     });
@@ -82,7 +89,7 @@ public class EditorScreen extends ScreenAdapter {
         });
 
         modules.put(name, tool);
-        
+
         // Load icon texture
         Texture icon = null;
         try {
@@ -98,17 +105,18 @@ public class EditorScreen extends ScreenAdapter {
         }
 
         int index = tabs.size();
-        Rectangle rect = new Rectangle(10 + (index * (TAB_SIZE + 10)), (TOOLBAR_HEIGHT - TAB_SIZE)/2f, TAB_SIZE, TAB_SIZE);
+        // Reserve a placeholder rect; real widths are computed in layoutTabs()
+        Rectangle rect = new Rectangle(10 + (index * (TAB_MIN_WIDTH + TAB_GAP)), TOOLBAR_HEIGHT + (TAB_BAR_HEIGHT - TAB_HEIGHT)/2f, TAB_MIN_WIDTH, TAB_HEIGHT);
         tabs.put(name, rect);
-        
-        // Store icon in a map or add to ToolModule interface? 
-        // For simplicity, let's store it in a parallel map in EditorScreen since ToolModule interface is minimal.
-        // Better yet, extend a bit or use a Map<String, Texture> moduleIcons
+
         if (icon != null) {
             moduleIcons.put(name, icon);
         }
+
+        // Recompute tab layout to adapt to new module title
+        layoutTabs(Gdx.graphics.getWidth());
     }
-    
+
     // Store icons
     private Map<String, Texture> moduleIcons = new LinkedHashMap<>();
 
@@ -117,7 +125,7 @@ public class EditorScreen extends ScreenAdapter {
         currentModule = modules.get(name);
         if (currentModule != null) {
             currentModule.onFocus();
-            currentModule.resize(Gdx.graphics.getWidth(), Gdx.graphics.getHeight() - TOOLBAR_HEIGHT);
+            currentModule.resize(Gdx.graphics.getWidth(), Gdx.graphics.getHeight() - TOOLBAR_HEIGHT - TAB_BAR_HEIGHT);
             Gdx.input.setInputProcessor(new InputMultiplexer(new InputAdapter(){
                 public boolean touchDown(int x, int y, int p, int b) {
                     for(Map.Entry<String, Rectangle> e : tabs.entrySet()) {
@@ -127,6 +135,24 @@ public class EditorScreen extends ScreenAdapter {
                 }
             }, currentModule.getInputProcessor()));
         }
+    }
+
+    // Recompute tab rectangles based on module titles and available width
+    private void layoutTabs(int totalWidth) {
+        int x = 10; // start left padding
+        for (Map.Entry<String, Rectangle> e : tabs.entrySet()) {
+            String name = e.getKey();
+            ToolModule mod = modules.get(name);
+            String title = (mod != null) ? mod.getTitle() : name;
+            int estWidth = Math.max(TAB_MIN_WIDTH, (int)(title.length() * 8) + TAB_PADDING * 2);
+            Rectangle r = e.getValue();
+            r.x = x;
+            r.y = TOOLBAR_HEIGHT + (TAB_BAR_HEIGHT - TAB_HEIGHT)/2f;
+            r.width = estWidth;
+            r.height = TAB_HEIGHT;
+            x += estWidth + TAB_GAP;
+        }
+        // Add space for + button (we won't store it in tabs map)
     }
 
     @Override
@@ -145,7 +171,7 @@ public class EditorScreen extends ScreenAdapter {
             game.setScreen(desktop);
             return;
         }
-        
+
         Gdx.gl.glClearColor(0.05f, 0.05f, 0.05f, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
@@ -158,64 +184,92 @@ public class EditorScreen extends ScreenAdapter {
         uiBatch.setProjectionMatrix(uiViewport.getCamera().combined);
         uiBatch.begin();
         if (currentModule != null && currentModule.getTexture() != null) {
-            // FBO is Y-Up (bottom-left 0,0), Camera is Y-Down (top-left 0,0)
-            // To render upright, we map FBO(0,1) [Top-Left] to Screen(Top-Left).
-            // Standard FBO texture coords: (0,0) is Bottom-Left.
-            // draw(tex, x, y, w, h, u, v, u2, v2)
-            // We want Top of FBO (v=1) at Top of Screen (y).
-            // We want Bottom of FBO (v=0) at Bottom of Screen (y+h).
-            // So u=0, v=1, u2=1, v2=0.
-            uiBatch.draw(currentModule.getTexture(), 0, TOOLBAR_HEIGHT, Gdx.graphics.getWidth(), Gdx.graphics.getHeight()-TOOLBAR_HEIGHT, 0, 1, 1, 0);
+            // Render module FBO shifted down by toolbar + tab bar
+            uiBatch.draw(currentModule.getTexture(), 0, TOOLBAR_HEIGHT + TAB_BAR_HEIGHT, Gdx.graphics.getWidth(), Gdx.graphics.getHeight() - TOOLBAR_HEIGHT - TAB_BAR_HEIGHT, 0, 1, 1, 0);
         }
-        
+
         // Draw Toolbar background
-        // uiShapes is better for rects but we are in Batch. 
+        // uiShapes is better for rects but we are in Batch.
         // Let's end batch to draw shapes then batch again for icons? Or just use white px?
         uiBatch.end();
 
         uiShapes.setProjectionMatrix(uiViewport.getCamera().combined);
         uiShapes.begin(ShapeRenderer.ShapeType.Filled);
+        // Toolbar
         uiShapes.setColor(0.15f, 0.15f, 0.15f, 1);
         uiShapes.rect(0, 0, Gdx.graphics.getWidth(), TOOLBAR_HEIGHT);
-        
-        // Draw tab highlights
+        // Tab bar under toolbar
+        uiShapes.setColor(0.93f, 0.93f, 0.93f, 1f);
+        uiShapes.rect(0, TOOLBAR_HEIGHT, Gdx.graphics.getWidth(), TAB_BAR_HEIGHT);
+
+        // Draw tab highlights/backgrounds
         for(Map.Entry<String, Rectangle> e : tabs.entrySet()) {
             boolean active = currentModule == modules.get(e.getKey());
+            Rectangle r = e.getValue();
             if (active) {
-                uiShapes.setColor(0.3f, 0.3f, 0.5f, 1);
-                uiShapes.rect(e.getValue().x - 2, e.getValue().y - 2, e.getValue().width + 4, e.getValue().height + 4);
+                uiShapes.setColor(0.98f, 0.98f, 0.98f, 1f);
+            } else {
+                uiShapes.setColor(0.85f, 0.85f, 0.85f, 1f);
             }
+            uiShapes.rect(r.x - 2, r.y - 2, r.width + 4, r.height + 4);
         }
         uiShapes.end();
-        
+
         uiBatch.begin();
-        // Draw Module Icons and Titles
+        // Draw Module Icons in toolbar and Titles in tab bar
+        int iconX = TAB_ICON_MARGIN;
         for(Map.Entry<String, Rectangle> e : tabs.entrySet()) {
             String modName = e.getKey();
             ToolModule mod = modules.get(modName);
             Rectangle r = e.getValue();
-            
-            // Draw Icon
+
+            // Draw Icon in top toolbar (left area)
             Texture icon = moduleIcons.get(modName);
             if (icon != null) {
-                uiBatch.draw(icon, r.x, r.y, r.width, r.height);
+                uiBatch.draw(icon, iconX, (TOOLBAR_HEIGHT - TAB_ICON_SIZE)/2f, TAB_ICON_SIZE, TAB_ICON_SIZE);
+                iconX += TAB_ICON_SIZE + TAB_ICON_MARGIN;
             }
-            
-            // Draw Title (if active or if space permits? For now just draw it below or beside?)
-            // User requested: "Add the tab for the code editor and the name of the current file should be written on it"
-            // The current rect is just an icon square (48x48). We might need to make tabs wider or draw text next to it.
-            // Let's draw text to the right of the icon if active.
+
+            // Draw Title inside tab rect
             if (mod != null) {
                 String title = mod.getTitle();
                 if (title != null && !title.isEmpty()) {
-                    uiFont.setColor(Color.WHITE);
-                    // Center vertically in toolbar
+                    uiFont.setColor(activeColor(mod == currentModule));
                     float th = uiFont.getLineHeight();
-                    uiFont.draw(uiBatch, title, r.x + r.width + 10, r.y + (r.height + th)/2 - 4);
+                    uiFont.draw(uiBatch, title, r.x + 10, r.y + (r.height + th)/2 - 4);
                 }
             }
         }
+
+        // Draw + button after tabs
+        int plusX = 10;
+        for (Map.Entry<String, Rectangle> e : tabs.entrySet()) plusX = Math.max(plusX, (int)(e.getValue().x + e.getValue().width + TAB_GAP));
+        uiFont.setColor(Color.DARK_GRAY);
+        uiFont.draw(uiBatch, "+", plusX + 8, TOOLBAR_HEIGHT + (TAB_BAR_HEIGHT + uiFont.getLineHeight())/2 - 4);
+
+        // Draw Save/Run Icons (Right Aligned in Toolbar)
+         if (true) {
+            int icon_size = 24;
+            int icon_y = (TOOLBAR_HEIGHT - icon_size)/2;
+            int right_margin = 10;
+
+            // Run Button
+            Texture runIcon = moduleIcons.get("Run");
+            Texture saveIcon = moduleIcons.get("Save");
+            // Fallback to known asset names if we loaded them
+            if (moduleIcons.get("Code") != null) {
+                // Use known right-side icons from assets if loaded earlier
+                runIcon = Gdx.files.internal("icons/icon_play.png").exists() ? new Texture(Gdx.files.internal("icons/icon_play.png")) : runIcon;
+                saveIcon = Gdx.files.internal("icons/icon_save.png").exists() ? new Texture(Gdx.files.internal("icons/icon_save.png")) : saveIcon;
+            }
+            if (runIcon != null) uiBatch.draw(runIcon, Gdx.graphics.getWidth() - icon_size - right_margin, icon_y, icon_size, icon_size);
+            if (saveIcon != null) uiBatch.draw(saveIcon, Gdx.graphics.getWidth() - (icon_size * 2) - (right_margin * 2), icon_y, icon_size, icon_size);
+        }
         uiBatch.end();
+    }
+
+    private Color activeColor(boolean active) {
+        return active ? Color.BLACK : Color.DARK_GRAY;
     }
 
     @Override
@@ -223,11 +277,13 @@ public class EditorScreen extends ScreenAdapter {
         uiViewport.update(w, h, false);
         ((OrthographicCamera)uiViewport.getCamera()).setToOrtho(true, w, h);
         if (currentModule != null) {
-            currentModule.resize(w, h - TOOLBAR_HEIGHT);
+            currentModule.resize(w, h - TOOLBAR_HEIGHT - TAB_BAR_HEIGHT);
             // Ensure inputs are updated too
             if (currentModule instanceof LuaTool) {
-                ((LuaTool) currentModule).setInputBounds(0, TOOLBAR_HEIGHT, w, h - TOOLBAR_HEIGHT);
+                ((LuaTool) currentModule).setInputBounds(0, TOOLBAR_HEIGHT + TAB_BAR_HEIGHT, w, h - TOOLBAR_HEIGHT - TAB_BAR_HEIGHT);
             }
         }
+        // recompute tab layout on resize
+        layoutTabs(w);
     }
 }
