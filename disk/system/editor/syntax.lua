@@ -23,12 +23,12 @@ end
 
 -- Tokenize line for rendering
 function syntax.tokenize_line(line, language)
-    if not tokenizer or not tokenizer.tokenize then
+    if not _G.tokenizer or not _G.tokenizer.tokenize then
         -- Fallback: return entire line as text token
         return {{type = "text", text = line}}
     end
     
-    local tokens = tokenizer.tokenize(line, language or "lua")
+    local tokens = _G.tokenizer.tokenize(line, language or "lua")
     
     -- Convert Lua table (1-indexed) to array
     local result = {}
@@ -43,11 +43,11 @@ end
 
 -- Detect language from filename
 function syntax.detect_language(filename)
-    if not tokenizer or not tokenizer.detect_language then
+    if not _G.tokenizer or not _G.tokenizer.detect_language then
         return "text"
     end
     
-    return tokenizer.detect_language(filename)
+    return _G.tokenizer.detect_language(filename)
 end
 
 -- Parse user-defined functions from buffer
@@ -87,16 +87,16 @@ end
 
 -- Update autocomplete with user functions
 function syntax.update_autocomplete()
-    if not autocomplete or not autocomplete.clear_user_functions then
+    if not _G.autocomplete or not _G.autocomplete.clear_user_functions then
         return
     end
     
-    autocomplete.clear_user_functions()
+    _G.autocomplete.clear_user_functions()
     
     local functions = syntax.parse_user_functions()
     for _, func in ipairs(functions) do
-        if autocomplete.add_user_function then
-            autocomplete.add_user_function(func)
+        if _G.autocomplete.add_user_function then
+            _G.autocomplete.add_user_function(func)
         end
     end
 end

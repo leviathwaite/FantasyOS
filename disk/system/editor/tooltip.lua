@@ -11,11 +11,12 @@ tooltip.y = 0
 
 -- Show tooltip
 function tooltip.show(func_name, x, y)
-    if not tooltip or not tooltip.get_tooltip then
+    -- Check if the global tooltip API is available from Java
+    if not _G.tooltip or not _G.tooltip.get_tooltip then
         return
     end
     
-    local tooltip_text = tooltip.get_tooltip(func_name)
+    local tooltip_text = _G.tooltip.get_tooltip(func_name)
     if tooltip_text then
         tooltip.visible = true
         tooltip.text = tooltip_text

@@ -11,12 +11,13 @@ autocomplete.prefix = ""
 
 -- Show autocomplete popup
 function autocomplete.show(prefix, cursor_x, cursor_y)
-    if not autocomplete or not autocomplete.get_suggestions then
+    -- Check if the global autocomplete API is available from Java
+    if not _G.autocomplete or not _G.autocomplete.get_suggestions then
         return
     end
     
     autocomplete.prefix = prefix
-    autocomplete.suggestions = autocomplete.get_suggestions(prefix, "") or {}
+    autocomplete.suggestions = _G.autocomplete.get_suggestions(prefix, "") or {}
     autocomplete.selected = 1
     autocomplete.visible = (#autocomplete.suggestions > 0)
 end
